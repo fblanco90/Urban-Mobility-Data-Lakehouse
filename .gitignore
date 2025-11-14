@@ -1,0 +1,9 @@
+# Data Files
+data/
+
+# Python Caches
+__pycache__/
+*.pyc
+
+# Notebook Checkpoints
+.ipynb_checkpoints/
