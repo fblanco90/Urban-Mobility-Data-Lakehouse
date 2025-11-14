@@ -7,3 +7,7 @@ __pycache__/
 
 # Notebook Checkpoints
 .ipynb_checkpoints/
+
+# Local environment
+.venv/
+venv/
