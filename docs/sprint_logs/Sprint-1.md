@@ -69,7 +69,7 @@ The Silver layer serves as the "single source of truth" within the data lakehous
 
 ## Implementation Summary
 
-### Tables Created in Silver Layer
+### Views Created in Silver Layer
 
 1. **`silver.cleaned_mobility`** - Cleaned mobility trip data
 2. **`silver.cleaned_population`** - Cleaned demographic data  
@@ -113,20 +113,8 @@ The Silver layer serves as the "single source of truth" within the data lakehous
 - **Consistent Naming**: Used English snake_case convention across all tables
 - **Audit Trail**: Preserved original filenames and ingestion timestamps for traceability
 - **Data Typing**: Ensured proper data types for efficient storage and query performance
-
-## Data Quality Metrics
-
-| Metric | Value | Success Rate |
-|--------|-------|--------------|
-| Total mobility records processed | 134,726,205 | - |
-| Records with valid origin population | 134,402,517 | 99.76% |
-| Records with valid destination population | 134,401,830 | 99.76% |
-| Population zones with valid data | 3,743 out of 3,792 | 98.70% |
-
-## File Output
-All Silver layer tables are persisted within the DuckDB lakehouse architecture, maintaining ACID properties and ready for consumption by the Gold layer analytical processes.
-
-The Silver layer successfully transforms raw mobility and demographic data into an integrated, analysis-ready dataset that supports the transport domain experts' requirements for pattern analysis and gravity modeling.
+- **Schema:**
+    - ![alt text](../diagrams/Silver_Schema_diagram.png)
 
 ---
 
