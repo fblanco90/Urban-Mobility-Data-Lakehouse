@@ -65,68 +65,74 @@ The Bronze layer creates a raw, immutable, and performant copy of the source dat
 
 # 3.2. Silver Layer Transformation `(Completed)`
 
-The Silver layer serves as the "single source of truth" within the data lakehouse. Its purpose is to transform the raw data from the Bronze layer into cleaned, integrated, and well-structured datasets ready for analysis.
+The Silver layer serves as the "single source of truth" within the lakehouse. Its purpose is to transform the raw, disparate data from the Bronze layer into a cohesive set of cleaned, integrated, and well-structured views ready for analysis. This was achieved by creating a series of modular, interdependent views.
 
-## Implementation Summary
+#### Silver Schema Overview
 
-### Tables Created in Silver Layer
+The final Silver layer consists of several specialized views that build upon each other, culminating in a rich, integrated dataset.
 
-1. **`silver.cleaned_mobility`** - Cleaned mobility trip data
-2. **`silver.cleaned_population`** - Cleaned demographic data  
-3. **`silver.silver_integrated_od`** - Core integrated table (OD matrices with demographics)
+-   **Component Views:**
+    -   `silver.cleaned_mobility`: Cleans and standardizes raw trip records.
+    -   `silver.cleaned_population`: Cleans and types population data.
+    -   `silver.cleaned_district_rent`: Cleans and types district-level rent data.
+    -   `silver.mapping_ine_mitma_districts`: Provides the crucial link between MITMA and INE coding systems.
+    -   `silver.zoning_districts`: Provides a clean, stable interface to district names.
+-   **Integrated Views:**
+    -   `silver.zone_metrics`: A powerful analytical view that combines population and economic data for each origin-destination pair.
+    -   `silver.silver_integrated_od`: The primary fact table, enriching each trip record with origin and destination population.
 
-### Data Transformation Process
+#### Data Transformation Logic
 
-#### 1. **Mobility Data Cleaning** (`silver.cleaned_mobility`)
-- **Date Conversion**: Transformed `fecha` from `YYYYMMDD` string format (`"20230508"`) to proper `DATE` type (`2023-05-08`)
-- **Distance Standardization**: Handled range values by converting:
-  - `"0.5-2"` → `1.25` (average)
-  - `"2-10"` → `6.0` (average)
-  - `"10-50"` → `30.0` (average) 
-  - `">50"` → `75.0` (estimated)
-- **Type Casting**: Converted `viajes` (trips) from `VARCHAR` to `INTEGER`
-- **Column Renaming**: Standardized Spanish names to English:
-  - `origen` → `origin_zone_id`
-  - `destino` → `destination_zone_id`
-  - `viajes` → `trips_count`
+**1. Mobility Data Cleaning (`silver.cleaned_mobility`)**
+-   **Date & Time Conversion**: Transformed `fecha` (e.g., `"20230508"`) to a proper `DATE` type and cast `periodo` to `hour` as an `INTEGER`.
+-   **Distance Calculation**: Implemented a precise distance calculation using `avg_distance_per_trip_km = viajes_km / viajes`. This replaced the initial estimation from categorical ranges, providing a more accurate metric. A `CASE` statement was used to robustly handle cases where `viajes` is zero to prevent division-by-zero errors.
+-   **Type Casting & Standardization**: Cast `viajes` to `BIGINT` for safety and renamed columns to a clear, English-based standard (e.g., `origen` → `origin_zone_id`).
+-   **Column Pruning**: Removed `actividad_origen`, `actividad_destino`, `estudio_origen_posible`, `estudio_destino_posible`, `residencia`, `renta`, `edad`, `sexo` columns as they were deemed not necessary for the core analytical model, resulting in a leaner and more focused view.
 
-#### 2. **Population Data Cleaning** (`silver.cleaned_population`)
-- **Missing Value Handling**: Converted `"NA"` values to `NULL` while preserving all zone records
-- **Type Casting**: Converted population counts from `VARCHAR` to `INTEGER`
-- **Column Renaming**:
-  - `column0` → `zone_id`
-  - `column1` → `population_count`
+**2. Demographic & Economic Data Cleaning**
+-   **Population (`silver.cleaned_population`):** Handled `'NA'` string values by converting them to `NULL` using `TRY_CAST` to prevent data loss or query failure. Renamed generic `column0`/`column1` to `zone_id`/`population_count`.
+-   **Rent (`silver.cleaned_district_rent`):** Filtered for the relevant indicator (`'Renta neta media por persona'`) and year (`2023`). Extracted the numeric `district_code` using `REGEXP_EXTRACT` and cleaned the monetary value by removing `.` separators and casting to `DOUBLE` for precision.
+-   **Mapping (`silver.mapping_ine_mitma_districts`):** Created a clean, two-column view to serve as the "Rosetta Stone" for translating between MITMA and INE district codes, essential for joining rent data.
 
-#### 3. **Data Integration** (`silver.silver_integrated_od`)
-- **Join Logic**: Successfully joined mobility data with population data using zone IDs
-- **Demographic Enrichment**: Added both origin and destination population counts to each trip record
-- **Join Success Rate**: 99.76% of trips successfully linked with demographic data (134.4M out of 134.7M records)
+**3. Data Integration**
 
-## Key Technical Decisions
+The final step in the Silver layer is to integrate the cleaned component views into powerful, enriched datasets. Two distinct integrated views were created, each serving a different analytical purpose.
 
-### Data Quality Handling
-- **Explicit NULLs**: Used `NULL` for missing values rather than filtering out records, preserving data completeness
-- **Range Value Strategy**: Applied averaging for distance ranges to maintain analytical utility
-- **Quality Thresholds**: Applied filters for essential fields (non-null dates, zone IDs, and trip counts)
+#### a. `silver.silver_integrated_od`: Enriching Individual Trips
+
+This view serves as the primary **fact table** for the lakehouse. Its purpose is to enrich each individual trip record with essential demographic information.
+
+-   **Granularity:** Each row represents a group of trips for a specific hour between a unique origin-destination pair.
+-   **Enrichment Logic:** It takes the `silver.cleaned_mobility` view as its base and performs a `LEFT JOIN` to the `silver.cleaned_population` view **twice**:
+    1.  The first join matches `origin_zone_id` to `zone_id` to attach the `origin_population`.
+    2.  The second join matches `destination_zone_id` to `zone_id` to attach the `destination_population`.
+-   **Outcome:** This creates a comprehensive table where every trip is linked to the population of both its start and end points, enabling fine-grained analysis of travel events.
+
+#### b. `silver.zone_metrics`: Creating a Zone-to-Zone Profile
+
+This view serves as a powerful **dimensional summary table**. Instead of focusing on individual trips, it describes the aggregate relationship between every pair of zones that have recorded travel.
+
+-   **Granularity:** Each row represents a unique origin-destination pair.
+-   **Integration Logic:**
+    -   It first identifies all unique OD pairs from the mobility data.
+    -   It crucially uses `silver.mapping_ine_mitma_districts` to translate the MITMA district codes for each origin and destination into their corresponding INE codes.
+    -   It then performs a series of `LEFT JOIN` operations to enrich each OD pair with:
+        -   **Population** for the origin and destination (by joining on the MITMA codes).
+        -   **Average Net Rent** for the origin and destination (by joining on the translated INE codes).
+        -   **Average Distance** between the pair.
+-   **Outcome:** This creates a comprehensive metrics table describing the socio-economic and geographic relationship between zones, serving as a direct and optimized input for the gravity model and other macro-level analyses.
+
+#### Key Architectural Decisions
+-   **View-Based Architecture**: The entire Silver layer was implemented as a series of logical views. This prevents data duplication, keeps the `lakehouse.duckdb` catalog lightweight, and ensures that any updates to Bronze-level logic are instantly propagated downstream.
+-   **Modular Design**: By creating separate cleaning views for each entity (mobility, population, rent), the logic is kept modular and easy to maintain. The final `silver.zone_metrics` view then composes these components into a final, integrated product.
+-   **Defensive Data Typing**: Used `TRY_CAST` for all numeric conversions from text and `VARCHAR` for identifiers that could contain non-numeric characters (`_AM`). This makes the entire pipeline resilient to data quality issues in the source files.
 
 ### Schema Design
 - **Consistent Naming**: Used English snake_case convention across all tables
-- **Audit Trail**: Preserved original filenames and ingestion timestamps for traceability
+- **Audit Trail**: Preserved original filenames and ingestion timestamps for traceability of the mobility
 - **Data Typing**: Ensured proper data types for efficient storage and query performance
-
-## Data Quality Metrics
-
-| Metric | Value | Success Rate |
-|--------|-------|--------------|
-| Total mobility records processed | 134,726,205 | - |
-| Records with valid origin population | 134,402,517 | 99.76% |
-| Records with valid destination population | 134,401,830 | 99.76% |
-| Population zones with valid data | 3,743 out of 3,792 | 98.70% |
-
-## File Output
-All Silver layer tables are persisted within the DuckDB lakehouse architecture, maintaining ACID properties and ready for consumption by the Gold layer analytical processes.
-
-The Silver layer successfully transforms raw mobility and demographic data into an integrated, analysis-ready dataset that supports the transport domain experts' requirements for pattern analysis and gravity modeling.
+- **Schema:**
+    - ![alt text](../diagrams/Silver_Schema_diagram.png)
 
 ---
 
