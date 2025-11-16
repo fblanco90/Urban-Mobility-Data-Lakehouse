@@ -54,7 +54,8 @@ The Bronze layer creates a raw, immutable, and performant copy of the source dat
     -   `zoning_districts.parquet`
     -   `population_districts.parquet`
     -   `mapping_ine_mitma.parquet`
-    -   `gdp_provinces.parquet`
+    -   `ine_rent_districts.parquet`
+    -   `municipal_coordinates.parquet`
 
 -   **Status:** The Bronze layer is complete and validated for the Sprint 1 sample data.
 
@@ -77,8 +78,9 @@ The final Silver layer consists of several specialized views that build upon eac
     -   `silver.cleaned_district_rent`: Cleans and types district-level rent data.
     -   `silver.mapping_ine_mitma_districts`: Provides the crucial link between MITMA and INE coding systems.
     -   `silver.zoning_districts`: Provides a clean, stable interface to district names.
+    -   `silver.municipal_coordinates`: Provides a clean table with INE codes and their latitude and longitude coordinates.
 -   **Integrated Views:**
-    -   `silver.zone_metrics`: A powerful analytical view that combines population and economic data for each origin-destination pair.
+    -   `silver.silver_zone_metrics`: A powerful analytical view that combines population and economic data for each origin-destination pair with their latitude and longitude.
     -   `silver.silver_integrated_od`: The primary fact table, enriching each trip record with origin and destination population.
 
 #### Data Transformation Logic
@@ -93,6 +95,7 @@ The final Silver layer consists of several specialized views that build upon eac
 -   **Population (`silver.cleaned_population`):** Handled `'NA'` string values by converting them to `NULL` using `TRY_CAST` to prevent data loss or query failure. Renamed generic `column0`/`column1` to `zone_id`/`population_count`.
 -   **Rent (`silver.cleaned_district_rent`):** Filtered for the relevant indicator (`'Renta neta media por persona'`) and year (`2023`). Extracted the numeric `district_code` using `REGEXP_EXTRACT` and cleaned the monetary value by removing `.` separators and casting to `DOUBLE` for precision.
 -   **Mapping (`silver.mapping_ine_mitma_districts`):** Created a clean, two-column view to serve as the "Rosetta Stone" for translating between MITMA and INE district codes, essential for joining rent data.
+-  **Coordinates (`silver.cleaned_municipal_coordinates`):** Just kept the first 5 digits of INE_COD, the municipal name, the longitude and the latitude casted to `DOUBLE`.
 
 **3. Data Integration**
 
@@ -110,7 +113,7 @@ This view serves as the primary **fact table** for the lakehouse. Its purpose is
 
 #### b. `silver.zone_metrics`: Creating a Zone-to-Zone Profile
 
-This view serves as a powerful **dimensional summary table**. Instead of focusing on individual trips, it describes the aggregate relationship between every pair of zones that have recorded travel.
+This view serves as a powerful **dimensional summary table** describing the structural relationship between every pair of zones that have recorded travel activity. It consolidates the essential geographic and socio-economic attributes needed for downstream modeling without performing any model-specific transformations.
 
 -   **Granularity:** Each row represents a unique origin-destination pair.
 -   **Integration Logic:**
@@ -120,6 +123,7 @@ This view serves as a powerful **dimensional summary table**. Instead of focusin
         -   **Population** for the origin and destination (by joining on the MITMA codes).
         -   **Average Net Rent** for the origin and destination (by joining on the translated INE codes).
         -   **Average Distance** between the pair.
+        -   **Coordinates** of each one of the pair elements.
 -   **Outcome:** This creates a comprehensive metrics table describing the socio-economic and geographic relationship between zones, serving as a direct and optimized input for the gravity model and other macro-level analyses.
 
 #### Key Architectural Decisions
