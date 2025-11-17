@@ -20,6 +20,10 @@ The primary objective of Sprint 1 is to design the foundational schemas for the 
 4.  Implement the transformation logic for the Silver layer.
 5.  Implement the aggregation logic for the Gold layer to support the key business questions.
 
+
+**Architecture Overview:**
+- ![alt text](../diagrams/Sprint1_architecture_diagram.png)
+
 ---
 
 ## 2. Data Sourcing & Exploration
@@ -27,8 +31,10 @@ The primary objective of Sprint 1 is to design the foundational schemas for the 
 This phase involved identifying, downloading, and performing a preliminary inspection of all required datasets for the one-week prototype (May 8-14, 2023).
 
 -   **MITMA Data:** Sourced from the official Open Data portal. This included 7 daily mobility files (`*_Viajes_distritos.csv.gz`) and several supporting metadata files (`nombres_distritos.csv`, `poblacion_distritos.csv`, `relacion_ine_zonificacionMitma.csv`).
--   **INE Data:** Sourced from the INEbase portal. This consisted of a single CSV file containing provincial GDP data from the "Contabilidad Regional de España" for the latest complete series (2000-2022).
-    - Access to the INE file: https://www.ine.es/dynt3/inebase/es/index.htm?padre=12155&capsel=12157
+-   **INE Data:** Sourced from the INEbase portal. This included (`municipios_coordenadas.csv` and `ine_renta_distritos.csv`)
+    - Access to the INE files: 
+        - https://www.ine.es/dynt3/inebase/index.htm?padre=12385&capsel=12384 
+        - https://centrodedescargas.cnig.es/CentroDescargas/detalleArchivo?sec=9000004# 
 
 All source files are stored locally in the `data/raw/` directory, **which is excluded from version control**.
 
@@ -148,7 +154,6 @@ The Gold layer consists of business-ready, aggregated data products specifically
     1.  **Read Data:** Source all data from the Silver layer tables.
     2.  **Business Question 1 (Typical Day):** Create the `gold_hourly_mobility_patterns` table by aggregating trip data by hour and day type (e.g., weekday/weekend).
     3.  **Business Question 2 (Infrastructure Gaps):** Create the `gold_gravity_model_inputs` table by joining trip data with population and economic indicators, preparing the necessary inputs for the gravity model formula.
-    4.  **Persist:** Save the final aggregated tables as new Parquet files in the `data/lakehouse/gold/` directory.
 
 -   **Implementation Details:**
     `[TODO: Document the final Gold layer aggregation queries and the resulting table schemas once this step is completed.]`
