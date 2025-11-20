@@ -70,7 +70,7 @@ The Bronze layer creates a raw, immutable, and performant copy of the source dat
 
 ---
 
-# 3.2. Silver Layer Transformation `(Completed)`
+# 3.2. Silver Layer Transformation `(@TODO Silver layer has to show the facts we have, not oriented for gold layer)`
 
 The Silver layer serves as the "single source of truth" within the lakehouse. Its purpose is to transform the raw, disparate data from the Bronze layer into a cohesive set of cleaned, integrated, and well-structured views ready for analysis. This was achieved by creating a series of modular, interdependent views.
 
@@ -146,18 +146,72 @@ This view serves as a powerful **dimensional summary table** describing the stru
 
 ---
 
-### 3.3. Gold Layer Aggregation `(To Be Implemented)`
+### 3.3. Gold Layer Aggregation `(Implemented)`
 
 The Gold layer consists of business-ready, aggregated data products specifically designed to answer the project's key business questions.
 
--   **Planned Steps:**
-    1.  **Read Data:** Source all data from the Silver layer tables.
-    2.  **Business Question 1 (Typical Day):** Create the `gold_hourly_mobility_patterns` table by aggregating trip data by hour and day type (e.g., weekday/weekend).
-    3.  **Business Question 2 (Infrastructure Gaps):** Create the `gold_gravity_model_inputs` table by joining trip data with population and economic indicators, preparing the necessary inputs for the gravity model formula.
-
--   **Implementation Details:**
-    `[TODO: Document the final Gold layer aggregation queries and the resulting table schemas once this step is completed.]`
+- **Implementation Status:** ✅ **Completed**
+- **Schema:** `gold` (created with spatial extension support)
+- **Data Sources:** All data is sourced from Silver layer tables (`silver.silver_zone_metrics`, `silver.silver_integrated_od`)
 
 ---
 
-*This document will be updated as progress is made on the Silver and Gold layers.*
+#### **Business Question 1 (Typical Day):** 
+**Table:** `gold.daily_average_trips`
+
+This table aggregates trip data by hour and day type (weekday/weekend) to analyze typical daily mobility patterns.
+
+**Visualization:** Includes matplotlib visualization showing hourly mobility patterns comparison between weekdays and weekends.
+
+#### **Business Question 2 (Infrastructure Gaps):** 
+**View:** `gold.zone_summary_by_rent`
+- Aggregates trips by origin and destination zones, excluding intra-zone trips
+- Categorizes zones into 4 rent tiers (Low, Medium, High, Very High) using NTILE(4)
+- Provides summary metrics including:
+  - Rent category and average net rent
+  - Population count
+  - Total trips originating and attracting
+- Includes visualization comparing trips generated vs. attracted by rent tier
+
+**Table:** `gold.gold_infrastructure_gaps`
+- Implements gravity model formula: T_ij = k × (P_i × E_j) / (d_ij²)
+- Calculates geographic distances using spatial extension (`st_distance_spheroid`)
+- Computes mismatch ratio (Actual Trips / Estimated Potential Trips)
+- Filters to exclude same-zone trips and ensure data quality
+
+---
+
+#### **Implementation Details:**
+
+**Technical Setup:**
+```sql
+CREATE SCHEMA IF NOT EXISTS gold;
+INSTALL 'spatial';
+LOAD 'spatial';
+```
+
+**Key Features:**
+
+- Spatial calculations for accurate distance measurements
+
+- Data quality filters (non-null coordinates, positive populations/rents)
+
+- Minimum distance threshold (0.5km) to prevent division by zero
+
+- Exclusion of intra-zone trips for meaningful analysis
+
+**Output Metrics:**
+
+- Hourly mobility patterns by day type
+
+- Zone-level rent categorization and trip analytics
+
+- Gravity model estimates and infrastructure gap identification
+
+- Mismatch ratios to prioritize underserved areas
+
+
+**Schema Design:**
+- **Schema:**
+    - ![alt text](../diagrams/Gold_Schema_diagram.png)
+---
