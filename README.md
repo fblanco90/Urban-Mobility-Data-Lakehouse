@@ -4,6 +4,27 @@ This project aims to design, implement, and orchestrate a 3-tier data lakehouse 
 
 The architecture leverages modern, lightweight data tools, with a focus on local development and scalability. The primary data sources are the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE).
 
+## Agile Methodology
+
+This project follows Agile methodology for collaborative team development. We work in iterative sprints with clear goals, regular standups, and continuous delivery.
+
+### Sprint Structure
+- **Sprint Duration:** 1-2 weeks
+- **Sprint Planning:** Defining user stories and acceptance criteria
+- **Daily Standups:** Progress tracking and blocker resolution  
+- **Sprint Reviews:** Demo of completed features
+- **Retrospectives:** Process improvement discussions
+
+### Documentation
+All sprint documentation, including:
+- Sprint goals and planning
+- Task breakdowns and assignments
+- Progress tracking
+- Review notes and demos
+- Retrospective outcomes
+
+Can be found in: `docs/sprint-logs/Sprint-X.md` (where X is the sprint number)
+
 ## Repository Structure
 
 This repository is organized to clearly separate concerns, separating documentation, source code, notebooks, and orchestration logic.
@@ -43,3 +64,6 @@ mobility_lakehouse/
 3.  Place the downloaded MITMA and INE source files into the `data/raw/` directory.
 
 The `data/lakehouse/` directory will be populated automatically when you run the ingestion and transformation scripts.
+
+
+
