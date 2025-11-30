@@ -10,30 +10,50 @@
 **Status:** In Progress
 
 ## 1. Sprint Overview & Objectives
-
-...
+In this sprint, the team focused on transitioning the project from a basic file-based Proof of Concept (PoC) to a managed Data Lakehouse architecture. The primary goal was to establish the foundational infrastructure using DuckLake, enabling ACID-compliant transactions, metadata management, and scalable storage for the future high-volume mobility data.
 
 **Key Goals for Sprint 2:**
-1.  ...
-
+1.  **Architecture Setup**:  Initialize the DuckLake catalog (`metadata.duckdb`) and define the logical schema layers (Bronze, Silver, Gold).
+2. **Scope Refinement**: Shift the granularity of analysis from Census Districts to Municipalities to align mobility data with available economic and demographic indicators.
+3. **Bronze Layer Implementation**: Build robust ingestion pipelines for heterogeneous raw data sources (CSV/Parquet), ensuring full data lineage and auditability.
+4. **Big Data Strategy**: Implement physical partitioning for the massive mobility matrices to optimize future query performance.
+5. **Silver Layer Normalization**: Construct a high-quality Silver layer by eliminating redundant columns, resolving many-to-one mapping conflicts, and establishing a single, unique identifier (`zone_id`) for municipalities to ensure strict referential integrity.
 
 ---
 
 ## 2. Data Sourcing & Exploration
+Data acquisition strategies were updated to target Municipal-level datasets. We sourced data exclusively from public government repositories, ensuring open access compliance.
+* **MITMA (Ministry of Transport)**:
+    * Mobility Matrices: Daily O-D trips (switched to `Viajes_municipios` files).
 
-...
+    * Zoning: Municipal names and population registries.
+
+    * Mapping: Cross-reference tables for MITMA-to-INE coding.
+
+* **INE (National Statistics Institute)**:
+
+    * Economics: Net income per person/household.
+
+* **CNIG (National Center for Geographic Information)**:
+
+    * Geography: Coordinates (centroids) for municipalities.
+
+* **Open Data**:
+
+    * Calendars: National working/holiday calendars.
+---
 
 ## 3. Proof of Concept Implementation
 
 This section details the step-by-step implementation of the 3-tier lakehouse PoC.
 
-### 3.1. Bronze Layer Ingestion `(In progress)`
+### 3.1. Bronze Layer Ingestion `(Finished)`
 
-The Bronze layer serves as the raw data reservoir for the Lakehouse, adhering to the principle of **Schema-on-Read**. The primary objective at this stage is to ingest data from public sources (MITMA, INE, CNIG, Open Data) with minimal transformation, ensuring fidelity to the original source while preparing the storage structure for scalability.
+The Bronze layer serves as the raw data reservoir for the Lakehouse, adhering to the **ELT** paradigm. The primary objective at this stage is to ingest data from public sources (MITMA, INE, CNIG, Open Data) with minimal transformation, ensuring fidelity to the original source while preparing the storage structure for scalability.
 
 **1. Design Principles & Metadata**
 To ensure auditability and robustness, we implemented a standardized ingestion pattern for all tables:
-*   **Data Fidelity:** All columns are ingested as `VARCHAR` (using DuckDB's `all_varchar=true`). This prevents ingestion failures due to data type mismatches (e.g., Spanish decimal formatting with commas/dots) and postpones type casting to the Silver layer.
+*   **Data Fidelity:** All columns are ingested as `VARCHAR` (using DuckDB's `all_varchar=true`). This prevents ingestion failures due to data type mismatches (e.g., Spanish decimal formatting with commas/dots) and preserves the raw state of the data for auditing. Type casting and cleaning are strictly deferred to the Silver layer.
 *   **Audit Columns:** Two metadata columns were appended to every table during ingestion:
     *   `ingestion_timestamp`: records exactly when the data entered the lakehouse.
     *   `source_url`: provides lineage traceability back to the specific public domain origin.
@@ -41,7 +61,7 @@ To ensure auditability and robustness, we implemented a standardized ingestion p
 **2. Mobility Data Strategy**
 The core mobility dataset (`mobility_sample_week`) presents a Big Data challenge, with potential volumes reaching billions of records. To handle this:
 *   **Partitioning Strategy:** We implemented physical partitioning by **Date** (`fecha`).
-*   **Implementation:** A "Define-Configure-Insert" pattern was used. We first defined the schema, explicitly configured the partition key via `SET PARTITIONED BY (fecha)`, and then inserted the data. This forces DuckLake to write data into physically separated folders (e.g., `/fecha=20230508/...`), optimizing downstream read performance by allowing query engines to skip irrelevant days.
+*   **Implementation:** A "Define-Configure-Insert" pattern was used. We first defined the schema, explicitly configured the partition key via `SET PARTITIONED BY (fecha)`, and then inserted the data. This forces DuckLake to write data into physically separated folders (e.g., `/fecha=20230508/...`). This architecture optimizes downstream performance by enabling **Partition Pruning**, allowing the query engine to read only the relevant daily folders instead of scanning the entire dataset.
 
 **3. Auxiliary Data (Dimensions) Handling**
 Contextual datasets (Zoning, Population, Economics, Calendars) were ingested as unpartitioned tables due to their small size. A flexible Python ingestion function was developed to handle the heterogeneous formats of Spanish public administration files:
@@ -65,7 +85,7 @@ The following tables have been successfully established in the `lakehouse.bronze
 - ![alt text](../diagrams/Bronze_Schema_diagramS2.png)
 ---
 
-### 3.2. Silver Layer Transformation `(In progress)`
+### 3.2. Silver Layer Transformation `(Finished)`
 
 The Silver layer represents the **"Trusted"** zone of the Lakehouse. In this stage, we transitioned from raw strings to strongly typed data, applied business rules for data integration, and established a robust **Star Schema** architecture utilizing **Surrogate Keys**. The primary transformation engine used was DuckDB SQL.
 
