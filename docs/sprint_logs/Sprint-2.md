@@ -107,20 +107,19 @@ The `fact_mobility` table was transformed to enforce a strict Schema:
 *   **Integer-Based Foreign Keys:** During insertion, we performed `LEFT JOIN` lookups against `dim_zones` to resolve raw text codes (e.g., `'28079'`) into system Integer IDs. This optimizes storage and join performance in the Gold layer.
 *   **External Zone Handling:** International codes (e.g., `'PT170'`) which do not exist in the Spanish Master Dimension are automatically set to `NULL`. This prioritizes schema strictness over international granularity.
 *   **Partition Maintenance:** The `fecha` partition strategy from Bronze was preserved.
-*   **Temporal Enrichment:** We pre-calculated the `day_of_week` to facilitate "Typical Day" analysis.
 
 **4. Silver Artifacts**
 The following tables constitute the Core Lakehouse layer:
 
 | Table Name | Type | Key Transformations |
 | :--- | :--- | :--- |
-| **`fact_mobility`** | Fact | Partitioned by Date. IDs resolved to `BIGINT` (Surrogate). Non-Spanish zones set to `NULL`. |
-| **`dim_zones`** | Dim | **Surrogate Key (1, 2, 3...)**. Deduplicated. Cleaned `NA` strings to SQL `NULL`. |
-| **`dim_coordinates`** | Dim | Joined to Surrogate ID. Centroids calculated via `AVG`. |
-| **`dim_festive_types`** | Dim | Normalized distinct list of holiday categories (e.g., 'NationalFestive'). |
-| **`bridge_zones_festives`** | Bridge | Links Zones to Dates and Holiday types. Uses Cross Join to apply national events to all zones. |
-| **`metric_population`** | Metric | Linked to Surrogate ID. Safe Double-to-Int casting. Filtered for 2023. |
-| **`metric_ine_rent`** | Metric | Linked to Surrogate ID. Parsed text fields (`"Code Name"`) to extract matching logic. |
+| **`fact_mobility`** | Fact | Partitioned by Date. IDs resolved to `BIGINT` from `dim_zone`. Mobilities from any zone not in `dim_zone` **discarded**. Date formated (with TRY because it can have wrong values i.e. `20231035`). Posibility of using batches. `periodo` casted to INTEGER. `Viajes` and `viajes_km` casted to DOUBLE (With REPLACE for decimals). |
+| **`dim_zones`** | Dim | Our own zone_id for each pair mitma-ine codes (BIGINT). Deduplicated mitma_codes with different ine_codes as MIN(ine_code) (Agregación de municipios). Cleaned `NA` or `NULL` in any mitma or ine code from `bronze.mapping_ine_mitma`. |
+| **`dim_coordinates`** | Dim | Joined to our `zone_id`. Centroids calculated via `latitude` and `longitude` (DOUBLE) (REPLACE `,` by `.`). |
+| **`dim_festive_types`** | Dim | Normalized distinct list of holiday categories (e.g., 'NationalFestive'). 1 type for all 3 different ways to say `NationalFestive` (`festivo nacional`, `Festivo Nacional` (ILIKE), `fiesta nacional`) |
+| **`bridge_zones_festives`** | Bridge | Links Zones to Dates and Holiday types. Uses Cross Join to apply national events to all zones. `festive_date` casted to DATE. |
+| **`metric_population`** | Metric | Linked to our `zone_id`. Safe Double-to-Int casting for population. Asigned all for 2023. |
+| **`metric_ine_rent`** | Metric | Linked to our `zone_id`. `income_per_capita` as BIGINT with REPLACE(`,` by ` `). `year` as INTEGER. Only from the rows where `Distritos` and  `Secciones` are `NULL`, the income is not null, and the `zone_id`exists in `dim_zone`. |
 
 
 **5. Schema:**
