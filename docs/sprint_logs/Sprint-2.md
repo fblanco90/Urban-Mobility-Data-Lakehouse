@@ -10,7 +10,7 @@
 **Status:** In Progress
 
 ## 1. Sprint Overview & Objectives
-In this sprint, the team focused on transitioning the project from a basic file-based Proof of Concept (PoC) to a managed Data Lakehouse architecture. The primary goal was to establish the foundational infrastructure using DuckLake, enabling ACID-compliant transactions, metadata management, and scalable storage for high-volume mobility data.
+In this sprint, the team focused on transitioning the project from a basic file-based Proof of Concept (PoC) to a managed Data Lakehouse architecture. The primary goal was to establish the foundational infrastructure using DuckLake, enabling ACID-compliant transactions, metadata management, and scalable storage for the future high-volume mobility data.
 
 **Key Goals for Sprint 2:**
 1.  **Architecture Setup**:  Initialize the DuckLake catalog (`metadata.duckdb`) and define the logical schema layers (Bronze, Silver, Gold).
@@ -47,7 +47,7 @@ Data acquisition strategies were updated to target Municipal-level datasets. We 
 
 This section details the step-by-step implementation of the 3-tier lakehouse PoC.
 
-### 3.1. Bronze Layer Ingestion `(In progress)`
+### 3.1. Bronze Layer Ingestion `(Finished)`
 
 The Bronze layer serves as the raw data reservoir for the Lakehouse, adhering to the **ELT** paradigm. The primary objective at this stage is to ingest data from public sources (MITMA, INE, CNIG, Open Data) with minimal transformation, ensuring fidelity to the original source while preparing the storage structure for scalability.
 
@@ -85,7 +85,7 @@ The following tables have been successfully established in the `lakehouse.bronze
 - ![alt text](../diagrams/Bronze_Schema_diagramS2.png)
 ---
 
-### 3.2. Silver Layer Transformation `(In progress)`
+### 3.2. Silver Layer Transformation `(Finished)`
 
 The Silver layer represents the **"Trusted"** zone of the Lakehouse. In this stage, we transitioned from raw strings to strongly typed data, applied business rules for data integration, and established a robust **Star Schema** architecture utilizing **Surrogate Keys**. The primary transformation engine used was DuckDB SQL.
 
@@ -107,20 +107,19 @@ The `fact_mobility` table was transformed to enforce a strict Schema:
 *   **Integer-Based Foreign Keys:** During insertion, we performed `LEFT JOIN` lookups against `dim_zones` to resolve raw text codes (e.g., `'28079'`) into system Integer IDs. This optimizes storage and join performance in the Gold layer.
 *   **External Zone Handling:** International codes (e.g., `'PT170'`) which do not exist in the Spanish Master Dimension are automatically set to `NULL`. This prioritizes schema strictness over international granularity.
 *   **Partition Maintenance:** The `fecha` partition strategy from Bronze was preserved.
-*   **Temporal Enrichment:** We pre-calculated the `day_of_week` to facilitate "Typical Day" analysis.
 
 **4. Silver Artifacts**
 The following tables constitute the Core Lakehouse layer:
 
 | Table Name | Type | Key Transformations |
 | :--- | :--- | :--- |
-| **`fact_mobility`** | Fact | Partitioned by Date. IDs resolved to `BIGINT` (Surrogate). Non-Spanish zones set to `NULL`. |
-| **`dim_zones`** | Dim | **Surrogate Key (1, 2, 3...)**. Deduplicated. Cleaned `NA` strings to SQL `NULL`. |
-| **`dim_coordinates`** | Dim | Joined to Surrogate ID. Centroids calculated via `AVG`. |
-| **`dim_festive_types`** | Dim | Normalized distinct list of holiday categories (e.g., 'NationalFestive'). |
-| **`bridge_zones_festives`** | Bridge | Links Zones to Dates and Holiday types. Uses Cross Join to apply national events to all zones. |
-| **`metric_population`** | Metric | Linked to Surrogate ID. Safe Double-to-Int casting. Filtered for 2023. |
-| **`metric_ine_rent`** | Metric | Linked to Surrogate ID. Parsed text fields (`"Code Name"`) to extract matching logic. |
+| **`fact_mobility`** | Fact | Partitioned by Date. IDs resolved to `BIGINT` from `dim_zone`. Mobilities from any zone not in `dim_zone` **discarded**. Date formated (with TRY because it can have wrong values i.e. `20231035`). Posibility of using batches. `periodo` casted to INTEGER. `Viajes` casted to DOUBLE (With REPLACE for decimals). |
+| **`dim_zones`** | Dim | Our own zone_id for each pair mitma-ine codes (BIGINT). Deduplicated mitma_codes with different ine_codes as MIN(ine_code) (Agregación de municipios). Cleaned `NA` or `NULL` in any mitma or ine code from `bronze.mapping_ine_mitma`. |
+| **`dim_coordinates`** | Dim | Joined to our `zone_id`. Centroids calculated via `latitude` and `longitude` (DOUBLE) (REPLACE `,` by `.`). |
+| **`dim_festive_types`** | Dim | Normalized distinct list of holiday categories (e.g., 'NationalFestive'). 1 type for all 3 different ways to say `NationalFestive` (`festivo nacional`, `Festivo Nacional` (ILIKE), `fiesta nacional`) |
+| **`bridge_zones_festives`** | Bridge | Links Zones to Dates and Holiday types. Uses Cross Join to apply national events to all zones. `festive_date` casted to DATE. |
+| **`metric_population`** | Metric | Linked to our `zone_id`. Safe Double-to-Int casting for population. Asigned all for 2023. |
+| **`metric_ine_rent`** | Metric | Linked to our `zone_id`. `income_per_capita` as BIGINT with REPLACE(`,` by ` `). `year` as INTEGER. Only from the rows where `Distritos` and  `Secciones` are `NULL`, the income is not null, and the `zone_id`exists in `dim_zone`. |
 
 
 **5. Schema:**
@@ -128,14 +127,16 @@ The following tables constitute the Core Lakehouse layer:
 
 ---
 
-### 3.3. Gold Layer Analytics `(In progress)`
+### 3.3. Gold Layer Analytics `(Finished)`
 
 The Gold layer constitutes the **Analytical/Mart** zone of the Lakehouse. Unlike the Silver layer, which focuses on data integrity and normalization, the Gold layer is purpose-built to answer specific business questions. It consists of highly aggregated, business-ready tables derived from complex joins between the Fact and Dimension tables.
 
 **1. Business Question 1: Mobility Pattern Characterization**
-To identify "Typical Day" patterns, we moved beyond simple date groupings and implemented a dynamic categorization engine:
-*   **Calendar Logic:** We implemented a Common Table Expression (CTE) to generate a continuous date series. This was joined with the `bridge_zones_festives` table to dynamically classify every date into three distinct categories: `'weekday'`, `'weekend'`, or `'festive'`.
-*   **Hourly Aggregation:** We aggregated the billions of records in `fact_mobility` to calculate the average hourly trip volume (`SUM(trips) / count_of_days`) for each category. This allows transport experts to visualize the "Pulse of the City" distinct from calendar anomalies.
+To identify "Typical Day" patterns, we moved beyond simple heuristic assumptions and implemented an unsupervised machine learning approach within the Gold Layer pipeline:
+*   **Profile Normalization**: We transformed raw trip counts into normalized daily profiles (probability distributions). This allows the model to compare the shape of the hourly demand curve (e.g., morning peaks vs. lunch plateaus) regardless of the absolute volume of trips.
+*   **Unsupervised Clustering (K-Means)**: We applied K-Means clustering ($k=3$) to mathematically group days with similar temporal behaviors. This creates data-driven categories rather than relying solely on the calendar.
+* **Gold Table Materialization:** The resulting centroids are stored in lakehouse.gold.typical_day_by_cluster. This table represents the "Pulse of the City" for distinct behaviors (e.g., Standard Workday, Leisure/Saturday, Quiet/Sunday).
+* **Semantic Validation:** We cross-referenced the mathematical clusters with the bridge_zones_festives Silver table to validate that the clusters correlate with real-world concepts (Weekdays vs. Holidays).
 
 **2. Business Question 2: Infrastructure Gap Identification (Gravity Model)**
 To identify underserved areas, we implemented a classic Gravity Model ($T_{ij} \propto \frac{P_i E_j}{d_{ij}^2}$) using DuckDB's advanced analytical capabilities:
@@ -151,7 +152,7 @@ The following tables represent the final analytical deliverables:
 
 | Table Name | Purpose | Key Metrics |
 | :--- | :--- | :--- |
-| **`daily_average_trips`** | **Typical Day Analysis**. Aggregates mobility by hour and day type (Weekday/Weekend/Festive). | `average_hourly_trips`, `day_type` |
+| **`typical_day_by_cluster`** | **Typical Day Analysis**. To provide a reference hourly mobility profile ("pulse of the city") for each behavioral cluster identified by the machine learning model. | `cluster_id`, `days_in_cluster`, `typical_day` |
 | **`gold_infrastructure_gaps`** | **Gravity Model**. Comparing theoretical demand vs. actual flow to find gaps. | `estimated_potential_trips`, `mismatch_ratio`, `geographic_distance_km` |
 
 
