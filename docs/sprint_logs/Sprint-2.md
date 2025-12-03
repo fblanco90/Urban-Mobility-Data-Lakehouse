@@ -113,7 +113,7 @@ The following tables constitute the Core Lakehouse layer:
 
 | Table Name | Type | Key Transformations |
 | :--- | :--- | :--- |
-| **`fact_mobility`** | Fact | Partitioned by Date. IDs resolved to `BIGINT` from `dim_zone`. Mobilities from any zone not in `dim_zone` **discarded**. Date formated (with TRY because it can have wrong values i.e. `20231035`). Posibility of using batches. `periodo` casted to INTEGER. `Viajes` and `viajes_km` casted to DOUBLE (With REPLACE for decimals). |
+| **`fact_mobility`** | Fact | Partitioned by Date. IDs resolved to `BIGINT` from `dim_zone`. Mobilities from any zone not in `dim_zone` **discarded**. Date formated (with TRY because it can have wrong values i.e. `20231035`). Posibility of using batches. `periodo` casted to INTEGER. `Viajes` casted to DOUBLE (With REPLACE for decimals). |
 | **`dim_zones`** | Dim | Our own zone_id for each pair mitma-ine codes (BIGINT). Deduplicated mitma_codes with different ine_codes as MIN(ine_code) (Agregación de municipios). Cleaned `NA` or `NULL` in any mitma or ine code from `bronze.mapping_ine_mitma`. |
 | **`dim_coordinates`** | Dim | Joined to our `zone_id`. Centroids calculated via `latitude` and `longitude` (DOUBLE) (REPLACE `,` by `.`). |
 | **`dim_festive_types`** | Dim | Normalized distinct list of holiday categories (e.g., 'NationalFestive'). 1 type for all 3 different ways to say `NationalFestive` (`festivo nacional`, `Festivo Nacional` (ILIKE), `fiesta nacional`) |
