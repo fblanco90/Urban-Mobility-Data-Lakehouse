@@ -118,7 +118,7 @@ The following tables constitute the Core Lakehouse layer:
 | **`dim_coordinates`** | Dim | Joined to our `zone_id`. Centroids calculated via `latitude` and `longitude` (DOUBLE) (REPLACE `,` by `.`). |
 | **`dim_zone_holidays`** | Dim | Links Zones to Dates and National Holidays. Uses Cross Join to apply national events to all zones. `festive_date` casted to DATE. National Holidays have 3 different ways to say `National Festive` (`festivo nacional`, `Festivo Nacional` (ILIKE), `fiesta nacional`). |
 | **`metric_population`** | Metric | Linked to our `zone_id`. Safe Double-to-Int casting for population. Asigned all for 2023. |
-| **`metric_ine_rent`** | Metric | Linked to our `zone_id`. `income_per_capita` as BIGINT with REPLACE(`,` by ` `). `year` as INTEGER. Only from the rows where `Distritos` and  `Secciones` are `NULL`, the income is not null, and the `zone_id`exists in `dim_zone`. |
+| **`metric_ine_rent`** | Metric | Linked to our `zone_id`. `income_per_capita` as DOUBLE with REPLACE(`,` by ` `). `year` as INTEGER. Only from the rows where `Distritos` and  `Secciones` are `NULL`, the income is not null, and the `zone_id`exists in `dim_zone`. |
 
 
 **5. Schema:**
