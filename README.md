@@ -31,28 +31,42 @@ This repository is organized to clearly separate concerns, separating documentat
 
 ```
 mobility_lakehouse/
-├── .gitignore          # Specifies files and folders for Git to ignore
-├── README.md           # You are here!
-├── requirements.txt    # Python project dependencies
-├── docker-compose.yml  # Configuration for running Airflow (Sprint 3)
-|
-├── airflow/            # Airflow-specific files
-│   └── dags/           # Scripts for orchestration pipelines (DAGs)
-|
-├── data/               # --- NOT TRACKED BY GIT ---
-│   ├── raw/            # Storage for original, unmodified source data
-│   └── lakehouse/      # Local storage for the Bronze, Silver, and Gold data layers
-|
-├── docs/               # Project documentation
-│   ├── diagrams/       # Architecture diagrams
-│   └── schemas.md      # Formal definitions of the lakehouse table schemas
-|
-├── notebooks/          # Jupyter notebooks for exploration, prototyping, and analysis
-|
-└── src/                # Production-quality source code
-    ├── ingestion/      # Scripts for ingesting raw data into the Bronze layer
-    ├── sql/            # Reusable SQL queries for ELT transformations
-    └── utils/          # Helper functions and utilities
+│
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── docker-compose.yml          
+│
+├── airflow/                    # Orchestration layer
+│   └── dags/                   # DAG definitions
+│
+├── data/                       # ── NOT TRACKED BY GIT ──
+│   ├── raw/                    # Original MITMA & INE dumps
+│   └── lakehouse/              # Bronze | Silver | Gold layers
+│       ├── metadata.duckdb
+│       └── metadata.duckdb.files/
+│           ├── bronze/
+│           ├── silver/
+│           └── gold/
+│       
+├── docs/
+│   ├── diagrams/
+│   ├── report/
+│   └── sprint-logs/
+│       ├── Sprint-1.md
+│       └── Sprint-x.md
+│
+├── notebooks/
+│   ├── 1_sprint1_schema_prototyping.ipynb
+│   └── 1_sprint2_schema_reprototyping.ipynb
+│
+
+│
+└── src/
+    ├── ingestion/              # Bronze-layer loaders
+    │   └── .gitkeep
+    └── sql/                    # Re-usable ELT queries
+       └── .gitkeep
 ```
 
 ### A Note on the `data/` Directory
