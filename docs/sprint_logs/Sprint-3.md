@@ -45,18 +45,19 @@ This section details the step-by-step implementation of the 3-tier lakehouse PoC
 
 ### 3.1. Bronze Layer Ingestion `(In process)`
 
-Finished in Sprint 2.
+New file added `mitma/municipios_coord.geojson` with the `POLYGONS`and `MULTIPOLYGONS` for each municipality from MITMA.
 
-**5. Schema:**
+**Schema:**
 - ![alt text](../diagrams/Sprint3/Bronze_Schema_diagramS3.png)
 ---
 
 ### 3.2. Silver Layer Transformation `(In process)`
 
-Modifications from Sprint 2:
-
 `fact_mobility`:
-- `date` and `period` (hour) columns removed. Now there is one only `TIMESTAMP WITH ZONE` column (`period_time`). `partition_date` = `date` (only for the partition storage).
+- `date` and `period` (hour) columns removed. Now there is one only `TIMESTAMP WITH ZONE` column (`period_time`). `partition_date` = `date` (only for the storage partition).
+
+`dim_zones`:
+- `polygon` column (Geometry) added to store the `POLYGONS`and `MULTIPOLYGONS` for each zone.
 
 `data_quality_logs`: Table to store data quality checks
 - `check_timestamp`: Time when the log was generated
@@ -66,17 +67,18 @@ Modifications from Sprint 2:
 - `notes`: Extra information needed for the metric
 
 
-**5. Schema:**
+**Schema:**
 - ![alt text](../diagrams/Sprint3/Silver_Schema_diagramS3.png)
 
 ---
 
 ### 3.3. Gold Layer Analytics `(In process)`
 
-Mofifications from Sprint 2
+`gold_infrastructure_gaps`
+- Calculation of distance from `st_point(origin.longitude, origin.latitude)` to `ST_Centroid(geometry_column)`.
 
 
-**5. Schema:**
+**Schema:**
 - ![alt text](../diagrams/Sprint3/Gold_Schema_diagramS3.png)
 
 ---
