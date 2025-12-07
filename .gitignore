@@ -11,3 +11,6 @@ __pycache__/
 # Local environment
 .venv/
 venv/
+
+# Temporal files
+*.tmp
