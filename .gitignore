@@ -11,3 +11,4 @@ __pycache__/
 # Local environment
 .venv/
 venv/
+.conda/
