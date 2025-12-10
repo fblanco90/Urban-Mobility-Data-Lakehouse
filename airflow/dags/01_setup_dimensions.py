@@ -60,6 +60,18 @@ def mobility_01_setup_dimensions():
         for s in schemas:
             con.execute(f"CREATE SCHEMA IF NOT EXISTS lakehouse.{s}")
             logging.info(f"Schema checked: {s}")
+        
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS lakehouse.silver.data_quality_log (
+                check_timestamp TIMESTAMP,
+                table_name VARCHAR,
+                metric_name VARCHAR,
+                metric_value DOUBLE,
+                notes VARCHAR
+            );
+        """)
+        logging.info("✅ Data Quality Log table ready.")
+
         con.close()
 
     @task
@@ -94,6 +106,11 @@ def mobility_01_setup_dimensions():
         
         count = con.execute("SELECT COUNT(*) FROM lakehouse.bronze.geo_municipalities").fetchone()[0]
         logging.info(f"✅ Ingested {count} municipalities geometry with audit columns.")
+        preview = con.execute("SELECT * FROM lakehouse.bronze.geo_municipalities LIMIT 5").fetchall()
+        logging.info("First 5 rows of lakehouse.bronze.geo_municipalities:")
+        for row in preview:
+            logging.info(row)
+
         con.close()
 
     @task
@@ -300,6 +317,49 @@ def mobility_01_setup_dimensions():
 
         con.close()
 
+    @task
+    def audit_dimensions():
+        logging.info("🕵️ Starting Data Quality Audit for Dimensions...")
+        con = get_connection()
+
+        # Helper to insert into log
+        def log_metric(table, metric, value, notes=''):
+            safe_val = value if value is not None else 0.0
+            query = f"""
+                INSERT INTO lakehouse.silver.data_quality_log 
+                VALUES (CURRENT_TIMESTAMP, '{table}', '{metric}', {safe_val}, '{notes}')
+            """
+            con.execute(query)
+            logging.info(f"   -> Audited {table}: {metric} = {safe_val}")
+
+        # 1. Zone Checks
+        missing_ine = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones WHERE ine_code IS NULL").fetchone()[0]
+        log_metric('dim_zones', 'zones_missing_ine_code', missing_ine)
+
+        missing_geo = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones WHERE polygon IS NULL").fetchone()[0]
+        log_metric('dim_zones', 'zones_missing_geo_coords', missing_geo)
+        
+        zone_count = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones").fetchone()[0]
+        log_metric('dim_zones', 'total_zones', zone_count)
+
+        # 2. Population Checks
+        pop_sum = con.execute("SELECT SUM(population) FROM lakehouse.silver.metric_population").fetchone()[0]
+        log_metric('metric_population', 'total_population_sum', pop_sum, 'Spain Total')
+
+        # 3. Rent Checks
+        try:
+            avg_rent = con.execute("SELECT AVG(income_per_capita) FROM lakehouse.silver.metric_ine_rent").fetchone()[0]
+            log_metric('metric_ine_rent', 'avg_income_per_capita', avg_rent, 'National Avg')
+            
+            rent_coverage = con.execute("""
+                SELECT (SELECT COUNT(DISTINCT zone_id) FROM lakehouse.silver.metric_ine_rent) * 100.0 / NULLIF((SELECT COUNT(*) FROM lakehouse.silver.dim_zones), 0)
+            """).fetchone()[0]
+            log_metric('metric_ine_rent', 'income_data_coverage_pct', rent_coverage)
+        except:
+            logging.warning("Skipping rent audit (table might be empty)")
+
+        con.close()
+    
     # --- DAG FLOW ---
     # 1. Create Schema
     # 2. Parallel: Ingest Geo + Ingest CSVs
@@ -309,9 +369,11 @@ def mobility_01_setup_dimensions():
     geo = ingest_geo_data()
     csvs = ingest_static_csvs()
     silver = build_silver_dimensions()
+    audit = audit_dimensions()
+
 
     # Parallel when not in local
     # init >> [geo, csvs] >> silver
-    init >> geo >> csvs >> silver
+    init >> geo >> csvs >> silver >> audit
 
 mobility_01_setup_dimensions()
