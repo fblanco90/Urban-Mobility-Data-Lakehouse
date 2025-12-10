@@ -81,3 +81,19 @@ The `data/lakehouse/` directory will be populated automatically when you run the
 
 
 
+# Airflow Configuration
+### Prerequisites
+- Astro Installed
+- Docker Installed
+
+### Configuration steps:
+- **IMPORTANT**: To have Docker running (open Docker Desktop).
+- Open a terminal (CMD/console in windows).
+- Navigate to the project route and access to `airflow` folder.
+    - You can use cd command to move through the directories.
+- Once inside, run the command `astro dev init` to initialize the Astro project.
+    - This will ask us if we want to run the command in that directory because we already have folders. We put `y`and `enter` to confirm (It will keep our dags while adding all the configuration needed for Airflow)
+- Once the Astro project is initalized, we can start it with the command `astro dev start`.
+    - This can take a while the first time, as it will create the Docker containers needed to run the project.
+- When it finishes, we can access to the Airflow Docker container trhough the url: `http://localhost:8080/` using our browser.
+- To stop the project, execute `astro dev stop`. It will shut down the docker containers **(not removing the DAGs!)**.
