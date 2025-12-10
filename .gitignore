@@ -29,5 +29,6 @@ airflow/*
 !airflow/dags/**
 !airflow/dags/*/
 !airflow/dags/*/**
+!airflow/requirements.txt
 
 airflow/dags/.airflowignore
