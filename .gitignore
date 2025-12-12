@@ -12,3 +12,19 @@ __pycache__/
 .venv/
 venv/
 .conda/
+
+# Temporal files
+*.tmp
+*.log
+*.pid
+
+# Astro project - ignore everything EXCEPT dags
+airflow/*
+
+# But explicitly include only the dags directory and its contents
+!airflow/dags/
+!airflow/dags/**
+!airflow/dags/*/
+!airflow/dags/*/**
+
+airflow/dags/.airflowignore
