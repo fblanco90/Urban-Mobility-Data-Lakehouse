@@ -105,7 +105,9 @@ def mobility_01_setup_dimensions():
         con.execute("CREATE OR REPLACE TABLE lakehouse.bronze.geo_municipalities AS SELECT * FROM df_view")
         
         count = con.execute("SELECT COUNT(*) FROM lakehouse.bronze.geo_municipalities").fetchone()[0]
-        logging.info(f"✅ Ingested {count} municipalities geometry with audit columns.")
+        cols = con.execute(f"DESCRIBE lakehouse.bronze.geo_municipalities").fetchall()
+        col_names = [c[0] for c in cols]
+        logging.info(f"✅ geo_municipalities: {count} rows. Columns: {col_names}")
         preview = con.execute("SELECT * FROM lakehouse.bronze.geo_municipalities LIMIT 5").fetchall()
         logging.info("First 5 rows of lakehouse.bronze.geo_municipalities:")
         for row in preview:
@@ -360,11 +362,7 @@ def mobility_01_setup_dimensions():
 
         con.close()
     
-    # --- DAG FLOW ---
-    # 1. Create Schema
-    # 2. Parallel: Ingest Geo + Ingest CSVs
-    # 3. Build Silver (Wait for all Bronze)
-    
+    # --- DAG FLOW ---    
     init = create_schemas()
     geo = ingest_geo_data()
     csvs = ingest_static_csvs()
@@ -373,7 +371,7 @@ def mobility_01_setup_dimensions():
 
 
     # Parallel when not in local
-    # init >> [geo, csvs] >> silver
+    # init >> [geo, csvs] >> silver >> audit
     init >> geo >> csvs >> silver >> audit
 
 mobility_01_setup_dimensions()

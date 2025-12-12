@@ -30,7 +30,68 @@ def mobility_02_ingest_daily():
         end = conf.get('end_date') or params['end_date']
         
         return [d.strftime("%Y%m%d") for d in pd.date_range(start=start, end=end)]
+    
+    @task
+    def ensure_tables_exist(**context):
+        """
+        Runs ONCE before parallel processing to avoid Race Conditions.
+        Creates Bronze and Silver tables if they don't exist.
+        """
+        logging.info("🛠 Checking/Creating Table Structures...")
+        con = get_connection()
+        
+        # 1. Get a sample URL (using start_date) to infer Bronze Schema
+        conf = context['dag_run'].conf or {}
+        params = context['params']
+        date_str = conf.get('start_date') or params['start_date']
+        
+        year = date_str[:4]
+        month = date_str[4:6]
+        url = BASE_URL_TEMPLATE.format(year=year, month=month, date=date_str)
+        
+        try:
+            # --- Bronze Init ---
+            table_exists = con.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='bronze' AND table_name='mobility_data'").fetchone()[0]
+            
+            if table_exists == 0:
+                logging.info(f"Creating Bronze table using sample: {url}")
+                # Create empty table based on schema from URL
+                con.execute(f"""
+                    CREATE TABLE lakehouse.bronze.mobility_data AS 
+                    SELECT 
+                        *,
+                        CURRENT_TIMESTAMP AS ingestion_timestamp,
+                        CAST('{url}' AS VARCHAR) AS source_url
+                    FROM read_csv_auto('{url}', all_varchar=true, ignore_errors=true)
+                    LIMIT 0;
+                """)
+                con.execute("ALTER TABLE lakehouse.bronze.mobility_data SET PARTITIONED BY (fecha);")
+            else:
+                logging.info("Bronze table already exists.")
 
+            # --- Silver Init ---
+            # Standard Create If Not Exists is safe here because this task runs alone
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS lakehouse.silver.fact_mobility (
+                    period TIMESTAMP WITH TIME ZONE,
+                    origin_zone_id BIGINT,
+                    destination_zone_id BIGINT,
+                    trips DOUBLE,
+                    processed_at TIMESTAMP,
+                    partition_date DATE
+                );
+            """)
+            try:
+                con.execute("ALTER TABLE lakehouse.silver.fact_mobility SET PARTITIONED BY (partition_date);")
+            except:
+                pass
+            
+            logging.info("✅ Table initialization complete.")
+            
+        finally:
+            con.close()
+
+    # max_active_tis_per_dag up to 8 when not in local
     @task(max_active_tis_per_dag=1, map_index_template="{{ task.op_kwargs['date_str'] }}")
     def process_single_day(date_str: str):
         """
@@ -51,53 +112,7 @@ def mobility_02_ingest_daily():
 
         try:
             # ==============================================================================
-            # PHASE 1: TABLE INITIALIZATION
-            # ==============================================================================
-            
-            # 1. Check if Bronze table exists
-            
-            table_exists = con.execute("""
-                SELECT count(*) 
-                FROM information_schema.tables 
-                WHERE table_schema = 'bronze' AND table_name = 'mobility_data'
-            """).fetchone()[0]
-            
-            if table_exists == 0:
-                logging.info("Table 'mobility_data' not found. Creating from source schema...")
-                # 2. Create Table Structure from the URL (Limit 0)
-                # We force 'all_varchar=true' to ensure robust ingestion
-                con.execute(f"""
-                    CREATE TABLE lakehouse.bronze.mobility_data AS 
-                    SELECT 
-                        *,
-                        CURRENT_TIMESTAMP AS ingestion_timestamp,
-                        CAST('{url}' AS VARCHAR) AS source_url
-                    FROM read_csv_auto('{url}', all_varchar=true, ignore_errors=true)
-                    LIMIT 0;
-                """)
-                
-                # 3. Configure Partitioning immediately after creation
-                con.execute("ALTER TABLE lakehouse.bronze.mobility_data SET PARTITIONED BY (fecha);")
-                logging.info("✅ Bronze Table created successfully.")
-
-            # Silver Table
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS lakehouse.silver.fact_mobility (
-                    period TIMESTAMP WITH TIME ZONE,
-                    origin_zone_id BIGINT,
-                    destination_zone_id BIGINT,
-                    trips DOUBLE,
-                    processed_at TIMESTAMP,
-                    partition_date DATE
-                );
-            """)
-            try:
-                con.execute("ALTER TABLE lakehouse.silver.fact_mobility SET PARTITIONED BY (partition_date);")
-            except:
-                pass
-
-            # ==============================================================================
-            # PHASE 2: BRONZE UPSERT (Streaming)
+            # PHASE 1: BRONZE UPSERT (Streaming)
             # ==============================================================================
             logging.info("⬇️ Bronze: Streaming data...")
             
@@ -122,7 +137,7 @@ def mobility_02_ingest_daily():
             logging.info(f"✅ Bronze: {b_count} rows ingested.")
 
             # ==============================================================================
-            # PHASE 3: SILVER UPSERT (Transformation)
+            # PHASE 2: SILVER UPSERT (Transformation)
             # ==============================================================================
             logging.info("🔄 Silver: Transforming data...")
             
@@ -212,9 +227,15 @@ def mobility_02_ingest_daily():
         finally:
             con.close()
 
-    # --- Flow ---
-    dates = generate_date_list()
-    processed_tasks = process_single_day.expand(date_str=dates)
-    processed_tasks >> audit_batch_results()
+    # --- DAG FLOW ---
+    dates_list = generate_date_list()
+    init_tables = ensure_tables_exist()
+    workers = process_single_day.expand(date_str=dates_list)
+    
+    # 3. Enforce Order: Init -> Workers
+    init_tables >> workers
+
+    # 4. Optional: Audit after workers
+    workers >> audit_batch_results()
 
 mobility_02_ingest_daily()
