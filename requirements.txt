@@ -2,5 +2,6 @@ duckdb==1.4.2
 pandas==2.3.3
 matplotlib==3.10.7
 scikit-learn==1.7.2
-keplergl
-numpy
+# keplergl==0.3.7
+pyspainmobility
+geopandas

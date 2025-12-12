@@ -82,7 +82,7 @@ The following tables have been successfully established in the `lakehouse.bronze
 | **`work_calendars`** | Dim | Open Data | Daily calendar identifying working days, weekends, and national holidays. |
 
 **5. Schema:**
-- ![alt text](../diagrams/Bronze_Schema_diagramS2.png)
+- ![alt text](../diagrams/Sprint2/Bronze_Schema_diagramS2.png)
 ---
 
 ### 3.2. Silver Layer Transformation `(Finished)`
@@ -122,7 +122,7 @@ The following tables constitute the Core Lakehouse layer:
 
 
 **5. Schema:**
-- ![alt text](../diagrams/Silver_Schema_diagramS2.png)
+- ![alt text](../diagrams/Sprint2/Silver_Schema_diagramS2.png)
 
 ---
 
@@ -156,6 +156,6 @@ The following tables represent the final analytical deliverables:
 
 
 **5. Schema:**
-- ![alt text](../diagrams/Gold_Schema_diagramS2.png)
+- ![alt text](../diagrams/Sprint2/Gold_Schema_diagramS2.png)
 
 ---

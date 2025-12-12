@@ -4,6 +4,8 @@ data/
 # Python Caches
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Notebook Checkpoints
 .ipynb_checkpoints/
@@ -11,4 +13,23 @@ __pycache__/
 # Local environment
 .venv/
 venv/
+.env
+.env.local
 .conda/
+
+# Temporal files
+*.tmp
+*.log
+*.pid
+
+# Astro project - ignore everything EXCEPT dags
+airflow/*
+
+# But explicitly include only the dags directory and its contents
+!airflow/dags/
+!airflow/dags/**
+!airflow/dags/*/
+!airflow/dags/*/**
+!airflow/requirements.txt
+
+airflow/dags/.airflowignore
