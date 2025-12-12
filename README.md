@@ -97,3 +97,73 @@ The `data/lakehouse/` directory will be populated automatically when you run the
     - This can take a while the first time, as it will create the Docker containers needed to run the project.
 - When it finishes, we can access to the Airflow Docker container trhough the url: `http://localhost:8080/` using our browser.
 - To stop the project, execute `astro dev stop`. It will shut down the docker containers **(not removing the DAGs!)**.
+
+
+# Cloud Lakehouse (Neon + S3) Configuration
+
+## 🏗 Architecture Overview
+
+| Component | Cloud (New) | Purpose |
+| :--- | :--- | :--- |
+| **Compute** | DuckDB (Airflow Worker) | Processing & SQL execution |
+| **Storage** | **AWS S3** | Stores raw files and Parquet data |
+| **Metadata** | **Neon (Postgres)** | Stores table definitions & handles locking |
+| **Concurrency** | **Multi-Writer (Parallel)** | Allows simultaneous task execution |
+
+---
+
+## 1. Cloud Prerequisites (Infrastructure)
+
+### ☁️ AWS (Storage)
+1.  **Create an S3 Bucket:**
+    *   Name: `ducklake-dbproject`.
+    *   Region: `eu-central-1`.
+2.  **Create an IAM User:**
+    *   Name: `ducklakeUser`.
+    *   Permission Policy: `AmazonS3FullAccess`.
+3.  **Generate Access Keys:**
+    *   Create an Access Key for "CLI/Code".
+    *   **Save immediately:** `Access Key ID` and `Secret Access Key`.
+
+### 🐘 Neon (Metadata Catalog)
+1.  **Create a Project:**
+    *   Name: `ducklake-dbproject`.
+2.  **Get Connection Details:**
+    *   Dashboard -> Connection Details.
+    *   Save the PGHOST, PGDATABASE, PGUSER and PGPASSWORD. 
+
+---
+
+## 2. Configure Airflow Connections
+In our project we use the Airflow connections to secure the conection to both Neon and AWS.
+Use the Airflow UI (Admin -> Connections) to store them securely.
+
+### Connection 1: AWS S3 (aws_s3_conn)
+- Conn Id: `aws_s3_conn`
+- Conn Type: `Amazon Web Services`
+- Login: (Your AWS Access Key ID)
+- Password: (Your AWS Secret Access Key)
+- Extra: (JSON format)
+- code
+    - ```JSON
+        {
+        "region_name": "eu-central-1"
+        }
+        ```
+
+### Connection 2: Neon Postgres (neon_catalog_conn)
+- Conn Id: `neon_catalog_conn`
+- Conn Type: `Postgres`
+- Host: (e.g., `ep-cool-frog-123456.eu-central-1.aws.neon.tech`)
+- Schema: `neondb`
+- Login: (e.g., `neondb_owner`)
+- Password: (Your Neon Password)
+- Port: `5432`
+
+
+## 3. Verification
+There is a `connection_test` DAG with the only porpuse of checking if the conection is working.
+This DAG has only 1 task which will connect, show a logger to confirm the connection, and close the connection.
+If this DAG works well, it means that the conections are working fine, so you're ready to execute any DAG.
+
+
