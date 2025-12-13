@@ -5,6 +5,8 @@ import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
 import logging
+import matplotlib as plt
+import os
 
 # --- CONFIGURATION ---
 # Default Polygon (South Spain) - Can be overridden in Airflow UI
@@ -27,25 +29,21 @@ def mobility_03_gold_analytics():
     @task
     def create_typical_day_cluster(**context):
         """
-        Gold Table 1: typical_day_by_cluster
-        Logic: Fetches range, runs K-Means (Python), and stores profiles in DuckDB.
+        Task 1: Clustering Analysis (K-Means)
+        Output: Creates 'lakehouse.gold.typical_day_by_cluster' AND 'lakehouse.gold.dim_cluster_assignments'
         """
         logging.info("--- 🏗️ Starting Table 1: Clustering Analysis ---")
-        
-        # 1. Get Parameters
         params = context['params']
         input_start_date = params['start_date']
         input_end_date = params['end_date']
         input_polygon_wkt = params['polygon_wkt']
 
         con = get_connection()
-
         try:
             con.execute("INSTALL spatial; LOAD spatial;")
-
-            # --- 1. DATA PREPARATION ---
-            logging.info(f"-> Fetching data ({input_start_date} to {input_end_date})...")
             
+            # 1. Fetch Data
+            logging.info(f"-> Fetching data ({input_start_date} to {input_end_date})...")
             query_fetch = f"""
                 SELECT 
                     m.partition_date AS date,
@@ -61,26 +59,22 @@ def mobility_03_gold_analytics():
                 GROUP BY 1, 2
                 ORDER BY 1, 2;
             """
-            
             df = con.execute(query_fetch).df()
 
             if df.empty:
-                logging.warning("⚠️ No data found for Table 1. Skipping clustering.")
+                logging.warning("⚠️ No data found. Skipping clustering.")
                 return
 
-            # Pivot: Rows=Days, Columns=Hours 0-23
+            # 2. Pivot & Normalize
             df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
             for h in range(24):
-                if h not in df_pivot.columns:
-                    df_pivot[h] = 0
+                if h not in df_pivot.columns: df_pivot[h] = 0
             df_pivot = df_pivot.sort_index(axis=1)
-
-            # --- 2. NORMALIZATION ---
-            logging.info("-> Normalizing profiles...")
+            
             row_sums = df_pivot.sum(axis=1)
             df_normalized = df_pivot.div(row_sums.replace(0, 1), axis=0).fillna(0)
 
-            # --- 3. CLUSTERING ---
+            # 3. Clustering
             n_clusters = 3
             logging.info(f"-> Running K-Means (k={n_clusters})...")
             kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
@@ -91,10 +85,14 @@ def mobility_03_gold_analytics():
                 'cluster_id': clusters
             })
 
-            # --- 4. BUILD GOLD TABLE ---
-            logging.info("-> Materializing 'typical_day_by_cluster'...")
+            # 4. Save Results
+            logging.info("-> Materializing Tables...")
             con.register('view_dim_clusters', df_results)
 
+            # A. Save Assignments (Needed for Plotting & Validation Tasks)
+            con.execute("CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS SELECT * FROM view_dim_clusters")
+
+            # B. Create the Profile Table
             query_typical_cte = f"""
                 CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
                 WITH dim_mobility_patterns AS (
@@ -120,7 +118,8 @@ def mobility_03_gold_analytics():
             """
             con.execute(query_typical_cte)
             con.unregister('view_dim_clusters')
-            
+            logging.info("✅ Clustering Complete.")
+
             # --- 5. INTERPRETATION ---
             analysis_df = con.execute("""
                 SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
@@ -131,6 +130,130 @@ def mobility_03_gold_analytics():
         except Exception as e:
             logging.error(f"❌ Failed in Table 1: {e}")
             raise e
+        
+        finally:
+            con.close()
+
+    @task
+    def validate_clusters_vs_calendar():
+        """
+        Task 2: Validation
+        Checks if the clusters map to logical days (Weekdays vs Weekends).
+        """
+        logging.info("--- 🕵️‍♂️ VALIDATION: 3 Clusters vs. Real Calendar ---")
+        con = get_connection()
+        pd.set_option('display.max_colwidth', None)
+
+        try:
+            query_validation = """
+            WITH national_holidays AS (
+                SELECT DISTINCT holiday_date
+                FROM lakehouse.silver.dim_zone_holidays
+            ),
+            labeled_data AS (
+                SELECT 
+                    p.cluster_id,
+                    p.date,
+                    dayname(p.date) as day_of_week,
+                    CASE 
+                        WHEN h.holiday_date IS NOT NULL THEN 'National Holiday'
+                        WHEN dayname(p.date) = 'Sunday' THEN 'Sunday'
+                        WHEN dayname(p.date) = 'Saturday' THEN 'Saturday'
+                        ELSE 'Weekday (Mon-Fri)'
+                    END as real_category
+                FROM lakehouse.gold.dim_cluster_assignments p
+                LEFT JOIN national_holidays h ON p.date = h.holiday_date
+            )
+            SELECT 
+                cluster_id,
+                real_category,
+                COUNT(*) as total_days,
+                list(strftime(date, '%Y-%m-%d') ORDER BY date) as specific_dates
+            FROM labeled_data
+            GROUP BY cluster_id, real_category
+            ORDER BY cluster_id, total_days DESC;
+            """
+            
+            df_val = con.execute(query_validation).df()
+
+            if df_val.empty:
+                logging.warning("⚠️ Validation table empty.")
+            else:
+                logging.info(f"\n{df_val.to_string(index=False)}")
+                
+        finally:
+            con.close()
+
+    @task
+    def plot_clustering_results():
+        """
+        Task 3: Visualization
+        Generates a .png plot of the typical daily profiles.
+        """
+        logging.info("--- 🎨 Plotting Cluster Results ---")
+        con = get_connection()
+
+        try:
+            # 1. Query Data (Joining the Profile table with Labels from Assignments)
+            query = """
+            WITH cluster_labels AS (
+                SELECT 
+                    cluster_id, 
+                    MODE(dayname(date)) as label
+                FROM lakehouse.gold.dim_cluster_assignments
+                GROUP BY cluster_id
+            )
+            SELECT 
+                t.hour,
+                'Cluster ' || t.cluster_id || ' (' || l.label || ')' as pattern_name,
+                t.avg_trips
+            FROM lakehouse.gold.typical_day_by_cluster t
+            JOIN cluster_labels l ON t.cluster_id = l.cluster_id
+            ORDER BY t.hour;
+            """
+            
+            demand_df = con.execute(query).df()
+
+            if demand_df.empty:
+                logging.error("❌ No data to plot.")
+                return
+
+            # 2. Pivot for Plotting
+            logging.info("Pivoting data...")
+            pivot_df = demand_df.pivot(index='hour', columns='pattern_name', values='avg_trips')
+
+            # 3. Generate Plot
+            logging.info("Generating matplotlib figure...")
+            fig, ax = plt.subplots(figsize=(12, 7))
+            
+            pivot_df.plot(kind='line', ax=ax, marker='o', markersize=4)
+            
+            ax.set_title('Typical Daily Mobility Patterns (Clustered Profiles)', fontsize=16)
+            ax.set_xlabel('Hour of Day', fontsize=12)
+            ax.set_ylabel('Average Trips per Hour', fontsize=12)
+            
+            ax.set_xticks(range(0, 24))
+            ax.set_xticklabels([f'{h:02d}:00' for h in range(24)], rotation=45, ha='right')
+            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.legend(title='Identified Pattern')
+            
+            plt.tight_layout()
+
+            # 4. Save to Disk
+            output_folder = 'results'
+            filename = 'typical_daily_patterns.png'
+            
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
+                logging.info(f"Created directory: {output_folder}")
+                
+            save_path = os.path.join(output_folder, filename)
+            plt.savefig(save_path, dpi=300)
+            
+            logging.info(f"✅ Plot successfully saved to: {save_path}")
+            
+            plt.close(fig)
+
         finally:
             con.close()
 
@@ -151,8 +274,6 @@ def mobility_03_gold_analytics():
         con = get_connection()
         
         try:
-            con.execute("INSTALL spatial; LOAD spatial;")
-            
             logging.info(f"-> Executing Gravity Model ({input_start_date} to {input_end_date})...")
 
             # We use f-string to inject variables safely
@@ -228,29 +349,57 @@ def mobility_03_gold_analytics():
             con.execute(gold_bq2_query)
             logging.info("✅ Table 'lakehouse.gold.infrastructure_gaps' created.")
 
-            # --- Verification Log ---
-            verification_df = con.execute("""
+        finally:
+            con.close()
+        
+    @task
+    def verify_infrastructure_gaps():
+        """
+        Task 5: Verification
+        Logs the Top 10 Zones with the highest 'Mismatch'.
+        """
+        logging.info("--- 🔎 Verification: Infrastructure Gaps ---")
+        con = get_connection()
+        pd.set_option('display.max_colwidth', None)
+        
+        try:
+            verification_bq2 = """
                 SELECT 
-                    org_zone_id, dest_zone_id, total_trips, 
-                    ROUND(estimated_potential_trips, 2) as est_potential, 
-                    ROUND(mismatch_ratio, 4) as mismatch
+                    org_zone_id,
+                    dest_zone_id,
+                    total_trips,
+                    estimated_potential_trips,
+                    geographic_distance_km,
+                    mismatch_ratio
                 FROM lakehouse.gold.infrastructure_gaps
                 WHERE total_trips > 10
                 ORDER BY mismatch_ratio ASC
-                LIMIT 5;
-            """).df()
+                LIMIT 10;
+            """
             
-            logging.info(f"📊 Top 5 High-Mismatch Zones:\n{verification_df.to_string(index=False)}")
-
-        except Exception as e:
-            logging.error(f"❌ Failed in Table 2: {e}")
-            raise e
+            logging.info("Querying Top 10 Mismatches...")
+            df_verify = con.execute(verification_bq2).df()
+            
+            if df_verify.empty:
+                logging.warning("⚠️ Verification returned no rows (maybe no trips > 10?).")
+            else:
+                logging.info(f"\n{df_verify.to_string(index=False)}")
+                
         finally:
             con.close()
 
     # --- DAG FLOW ---
-    # These tasks are independent analytics layers, so they run in parallel.
-    t1 = create_typical_day_cluster()
-    t2 = create_infrastructure_gaps()
+    # Branch 1: Clustering
+    t1_clustering = create_typical_day_cluster()
+    t3_validate = validate_clusters_vs_calendar()
+    t4_plot = plot_clustering_results()
+
+    # Branch 2: Infrastructure
+    t2_gaps = create_infrastructure_gaps()
+    t5_verify = verify_infrastructure_gaps()
+
+    # Dependencies
+    t1_clustering >> [t3_validate, t4_plot]
+    t2_gaps >> t5_verify
 
 mobility_03_gold_analytics()
