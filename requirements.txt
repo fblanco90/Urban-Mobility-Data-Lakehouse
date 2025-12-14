@@ -5,4 +5,6 @@ scikit-learn==1.7.2
 # keplergl==0.3.7
 pyspainmobility
 geopandas
+apache-airflow-providers-duckdb
+numpy
 
