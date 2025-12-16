@@ -565,6 +565,7 @@ def mobility_unified_pipeline_withgold():
             
             # Commit transaction
             con.commit()
+            logging.info(f"✅ Transaction Committed for {date_str}.")
 
         except Exception as e:
             con.rollback()
