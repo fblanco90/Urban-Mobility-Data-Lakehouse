@@ -471,6 +471,13 @@ def mobility_unified_pipeline_withgold():
         """
         logging.info(f"--- 🚀 Starting Pipeline for {date_str} ---")
         con = get_connection()
+        # --- FIX 1: CARGAR EXTENSIÓN PARA LEER HTTPS ---
+        # Si esto no está, DuckDB crashea al ver una URL 'https://'
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+        
+        # --- FIX 2: ESTABILIDAD DE RED ---
+        # Evita que el servidor del ministerio corte la conexión a mitad de descarga
+        con.execute("SET http_keep_alive=false;")
         
         # --- 1. URL Construction ---
         # Input: "20230101"
@@ -526,8 +533,7 @@ def mobility_unified_pipeline_withgold():
                     zo.zone_id AS origin_zone_id,
                     zd.zone_id AS destination_zone_id,
                     
-                    TRY_CAST(REPLACE(REPLACE(m.viajes, '.', ''), ',', '.') AS DOUBLE) AS trips,
-                    
+                    CAST(m.viajes AS DOUBLE) AS trips,                      
                     CURRENT_TIMESTAMP AS processed_at,
                     try_strptime(m.fecha, '%Y%m%d') AS partition_date
                     
