@@ -1,0 +1,343 @@
+\documentclass[11pt, a4paper]{article}
+
+% --- PACKAGES ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm}
+\usepackage{graphicx}     % For images
+\usepackage{booktabs}     % For nice tables
+\usepackage{hyperref}     % For links (repo URL)
+\usepackage{listings}     % For code snippets
+\usepackage{xcolor}       % For code coloring
+\usepackage{float}        % For figure placement
+\usepackage{titlesec}     % Custom section titles
+\usepackage{parskip}      % Space between paragraphs
+
+% --- CODE SNIPPET STYLING ---
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+% --- METADATA ---
+\title{\textbf{Building a Scalable 3-Tier Data Lakehouse for Mobility Analysis in Spain}\\ Big Data Engineering Project \\}
+\author{
+    \textbf{Joan Sánchez Verdú} \and \textbf{María López Hernández} \and \textbf{Fernando Blanco Membrives} \\    
+    \textit{Link to Code Repository:}\\ \textit{\url{https://github.com/joanstudyai-code/MUCEIM-BDET-Project.git}}
+}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+    \noindent 
+    \textbf{Abstract.} This paper presents the design and implementation of a scalable 3-tier Data Lakehouse architecture tailored for the analysis of large-scale mobility data in Spain. Leveraging open data from the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE), the system integrates high-volume Origin-Destination (OD) matrices with demographic and economic indicators. The infrastructure utilizes DuckDB for efficient analytical processing and DuckLake for ACID-compliant storage, orchestrated via Apache Airflow. We demonstrate the system's utility through two key use cases: characterizing typical daily mobility patterns and identifying transport infrastructure gaps using gravity models. The result is a robust, cost-effective platform enabling transport experts to derive data-driven insights for urban planning.
+\end{abstract}
+
+% --- SECTIONS ---
+
+\section{Introduction}
+% [GUIDE]: Introduce the context. 
+% - Mention the importance of big data in transport planning.
+% - State the Project Overview (from Page 1): Creating infrastructure for transport experts.
+% - Mention the tools: DuckDB, DuckLake, Airflow.
+Mobility analysis is critical for modern urban planning...
+
+\subsection{Objectives}
+The primary objective of this work was to construct a robust data infrastructure...
+\begin{itemize}
+    \item Build a scalable Lakehouse for mobility and economic data.
+    \item Implement ELT processes across Bronze, Silver, and Gold tiers.
+    \item Demonstrate analytical value through specific mobility use cases.
+\end{itemize}
+
+
+
+
+
+
+
+
+
+
+\section{Data Sources}
+The data lakehouse architecture is designed to ingest and integrate public domain data exclusively, ensuring reproducibility and open access. The following subsections detail the specific datasets and sources selected to build the information system.
+
+\subsection{MITMA Open Data}
+The core mobility dataset is sourced from the Spanish Ministry of Transport, Mobility and Urban Agenda (MITMA \cite{mitma}), specifically the \textit{Estudios Básicos de Movilidad}. This dataset provides high-resolution insights into the daily movements of residents derived from mobile network big data.
+From the MITMA the following files have been used:
+\begin{itemize}
+    \item \textbf{\textit{(202301-202312)\_Viajes\_municipios.tar}:} These files, located in the MITMA web at \textit{estudios\_basicos/por-municipios/viajes/meses-completos/}, contain the information of the mobility from an origin to a destination municipality, per day, per hour, for the year 2023.
+    \item \textbf{\textit{nombres\_municipios.csv}:} This file, located in the MITMA web at \textit{zonificacion/zonificacion\_municipios/}, contains the name of each municipality.
+    \item \textbf{\textit{relacion\_ine\_zonificacionMitma.csv}:} This file, located in the MITMA web at \textit{zonificacion/}, cointains the mapping between the MITMA codes and the INE codes for the municipalities.
+    \item  \textbf{\textit{poblacion.csv}:} This file, located in the MITMA web at \textit{zonificacion/}, cointains the population of each municipality per year.
+\end{itemize}
+
+\subsection{INE Demographics and Economics}
+To contextualize mobility flows and enable the gravity model analysis, mobility data is enriched with official statistics from the Spanish National Statistics Institute (INE \cite{ine}).
+The statistics used from INE are the following:
+\begin{itemize}
+    \item \textbf{\textit{ine\_rent\_municipalities.csv}:} This file, located in the INE web at \textit{\url{https://www.ine.es/jaxiT3/files/t/es/csv_bd/}}, contains the rent information per year and municipality.
+\end{itemize}
+
+\subsection{CNIG and Geographic Data}
+To perform spatial analysis (such as calculating distances between zones for the gravity model), the Lakehouse requires geospatial vector data. This data is sourced effectively from the National Center for Geographic Information (CNIG \cite{cnig}).
+
+\begin{itemize}
+    \item \textbf{\textit{pyspainmobility} (Python Library):} This package serves as the extraction interface for the official municipal boundaries. Specifically, the \texttt{Zones(zones="municipios", version=2)} module is used to fetch the geometry of Spanish municipalities.
+\end{itemize}
+
+\subsection{Open Data}
+To categorize mobility patterns by day type (e.g., distinguishing standard workdays from holidays), specific calendar data is integrated from Open Data portals.
+
+\begin{itemize}
+    \item \textbf{\textit{calendario\_laboral.csv}:} This file, sourced from the Madrid City Council Open Data Portal (\textit{Datos Abiertos Madrid} \cite{madrid_data}) at \textit{\url{https://datos.madrid.es/}}, contains the official working calendar. It provides the classification of dates (working days, weekends, and holidays) from 2013 to 2026 (included).
+\end{itemize}
+
+
+
+
+
+
+
+
+\section{Lakehouse Architecture}
+The system follows the Medallion Architecture pattern, decoupled into storage and compute layers to ensure scalability.
+
+\subsection{Technology Stack}
+The platform is built upon a modular, open-source stack designed to decouple compute from storage, allowing for independent scaling and cost efficiency. The architecture leverages the following core components:
+
+\begin{itemize}
+    \item \textbf{Compute Engine (DuckDB \cite{duckdb}):} Selected for its high-performance, vectorized execution engine optimized for OLAP workloads. Unlike distributed systems (e.g., Apache Spark), DuckDB runs in-process, significantly reducing infrastructure overhead while maintaining the ability to process datasets larger than RAM efficiently.
+    \item \textbf{Lakehouse Management (DuckLake \cite{ducklake}):} A specialized extension that brings Data Lakehouse capabilities to the ecosystem. It provides ACID transaction support (Atomicity, Consistency, Isolation, Durability) and snapshot isolation. This ensures that long-running ingestion tasks do not block analytical queries and prevents data corruption during partial write failures.
+    \item \textbf{Storage - Cloud Infrastructure (Neon + S3):} The system adopts a cloud-native architecture that physically separates data from metadata:
+    \begin{itemize}
+        \item \textbf{Data Plane (AWS S3):} Stores the actual physical files (Parquet and CSV). S3 provides durability and scalable object storage for the Bronze, Silver, and Gold layers.
+        \item \textbf{Control Plane (Neon Postgres):} A serverless PostgreSQL instance acts as the centralized catalog and metadata store. It manages table definitions, schemas, and transaction locking, enabling safe concurrent writes to S3 from multiple Airflow workers.
+    \end{itemize}
+    \item \textbf{Orchestration (Apache Airflow \cite{airflow}):} Manages the end-to-end lifecycle of data pipelines. Airflow allows for the definition of Directed Acyclic Graphs (DAGs) to handle complex task dependencies, backfilling strategies for historical data, and granular retries in case of network or source failures.
+\end{itemize}
+
+\subsection{Data Layering Strategy}
+The data pipeline is structured following the standard ``Medallion'' architecture pattern (Multi-hop), which organizes data quality into progressive stages. This design ensures that raw data is preserved for auditability while downstream layers provide cleaned and enriched datasets optimized for analytical consumption. The architecture consists of three distinct zones, each with a specific purpose and schema design.
+
+\subsubsection{Bronze Layer (Raw)}
+The Bronze layer acts as the landing zone (Staging Area) for all external data. Its primary function is to capture data from source systems in its native format with minimal modification, ensuring an immutable record of the original input.
+
+In this implementation (Figure \ref{fig:bronze_layer_diagram}), a distinct table is instantiated for each source entity to maintain data isolation. To ensure pipeline robustness and prevent ingestion failures due to type mismatches, all columns are initially cast as \texttt{VARCHAR}. Additionally, the ingestion process is configured to ignore malformed records (e.g., data quality anomalies such as invalid dates like '20231035'), ensuring that isolated errors do not halt the entire pipeline. Furthermore, to enhance data governance and auditability, three metadata columns are appended to every record during ingestion: \texttt{ingestion\_timestamp}, \texttt{filename}, and \texttt{source\_url}. Finally, to optimize storage and performance, the high-volume mobility data is physically partitioned by date (\texttt{fecha}), enabling efficient batch processing and parallelized reads in downstream layers.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{imgs/Bronze_Schema_diagramS3}
+    
+    \caption{Entity Diagram of the Bronze Layer. One table for each file.}
+    \label{fig:bronze_layer_diagram}
+\end{figure}
+
+
+\subsubsection{Silver Layer (Cleaned \& Integrated)}
+The Silver layer represents the refined, enterprise-wide view of the data. In this stage, data undergoes validation, cleaning, standardization, and enrichment processes to transform raw inputs into structured, trustworthy tables. The schema design (Figure \ref{fig:silver_layer_diagram}) follows a Star Schema approach, establishing a central fact table for mobility flows linked to surrounding dimension tables for spatial and socio-economic context. All tables include a \texttt{TIMESTAMP WITH TIME ZONE} column \texttt{processed\_at} for auditability.
+
+\paragraph{Dimension Modeling and Spatial Integration (dim\_zones)\\}
+The foundation of the Silver layer is the creation of a unified spatial dimension, \texttt{dim\_zones}. This table integrates the descriptive zoning metadata (MITMA codes, INE codes, and municipality names) with the geospatial vector data ingested in the Bronze layer.
+\begin{itemize}
+    \item \textbf{Geometry Reconstruction:} The Well-Known Text (WKT) strings stored in the Bronze layer are parsed into native \texttt{Geometry} objects using DuckDB's \texttt{ST\_GeomFromText} function from the \texttt{spatial} module.
+    \item \textbf{Surrogate Keys:} A unique integer identifier (\texttt{zone\_id}) is generated for each municipality. This decouples downstream analytics from changes in external string codes (MITMA/INE IDs) and improves join performance.
+\end{itemize}
+
+
+\paragraph{Socio-Economic Metrics and Filtering\\}
+Complementary metric tables are generated by cleaning raw CSVs. For the \texttt{metric\_population}, data is cast to \texttt{BIGINT} while removing metadata headers. 
+
+For the \texttt{metric\_ine\_rent} table, specific business logic is applied to the INE source file to resolve granularity mismatches. The pipeline filters the dataset to isolate the ``Average Net Income per Person'' indicator and explicitly excludes district-level or census-section entries (filtering out rows where \texttt{Distritos} or \texttt{Secciones} are populated). This ensures that the resulting economic metrics align perfectly with the municipal granularity of the \texttt{dim\_zones} table.
+
+\paragraph{Temporal Context (Holidays)\\}
+To support temporal analysis, a \texttt{dim\_zone\_holidays} table is constructed. This process involves filtering the raw working calendar for events classified as ``National Holidays'' and cross-referencing them with the zones. This dimension allows the Gold layer to accurately distinguish mobility patterns between standard working days and holidays.
+
+\paragraph{Mobility Fact Table Construction\\}
+The core mobility data is transformed into the \texttt{fact\_mobility} table. This process converts the raw, text-based daily CSVs into a strongly typed, time-series optimized format. Key transformations include:
+
+\begin{enumerate}
+    \item \textbf{Temporal Standardization:} The raw separate date and hour fields are combined into a single \texttt{TIMESTAMP WITH TIME ZONE} column, explicitly localized to 'Europe/Madrid'.
+    \item \textbf{Spatial Lookup:} Origin and Destination codes are replaced by their corresponding \texttt{zone\_id} through double joins against the \texttt{dim\_zones} table, ensuring referential integrity.
+    \item \textbf{Type Casting:} The "trips" column is cleaned (handling European decimal formats) and cast to \texttt{DOUBLE} precision to support fractional trip expansion factors.
+\end{enumerate}
+
+\paragraph{Data Observability and Quality Logging\\}
+To ensure the reliability of the pipeline, a dedicated table named \texttt{data\_quality\_logs} has been implemented within the Silver layer. Unlike the business data tables, this table serves as a metadata registry to persist the results of automated audit checks performed during ingestion (e.g., null rate calculations, row count validations, or statistical anomalies). This allows for longitudinal tracking of data health.
+
+The schema is designed to be generic enough to store heterogeneous metrics:
+{\raggedright
+\begin{itemize}
+    \item \textbf{\texttt{check\_timestamp}:} The exact time when the audit was executed.
+    \item \textbf{\texttt{table\_name}:} The target table being audited (e.g., \textit{fact\_mobility}).
+    \item \textbf{\texttt{metric\_name}:} A descriptive identifier for the KPI (e.g., \textit{avg\_income\_per\_capita}, \textit{null\_zone\_rate}).
+    \item \textbf{\texttt{metric\_value}:} A numeric field (\texttt{DOUBLE}) storing the result of the check.
+    \item \textbf{\texttt{notes}:} Textual field for context, such as the specific batch date range or error warnings associated with the metric.
+\end{itemize}
+}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{imgs/Silver_Schema_diagramS3}
+    
+    \caption{Entity-Relationship Diagram (ERD) of the Silver Layer. The schema follows a Star Schema design, centering on the \texttt{fact\_mobility} table linked to spatial (\texttt{dim\_zones}) and temporal dimensions.}
+    \label{fig:silver_layer_diagram}
+\end{figure}
+
+\subsubsection{Gold Layer (Mart)}
+[TODO]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Implementation Methodology}
+The operational logic of the Data Lakehouse is implemented through a unified, automated workflow orchestrated by Apache Airflow \cite{airflow}. This section details the engineering strategies employed to ensure scalable data ingestion, atomic processing of daily batches, and the automated generation of analytical models. The implementation prioritizes robustness through strict transaction management and modular task isolation.
+
+\subsection{Orchestration Strategy}
+To manage the dependencies between the Bronze, Silver, and Gold layers, the system utilizes a monolithic Directed Acyclic Graph (DAG) named \texttt{mobility\_unified\_pipeline}. This pipeline is architected using Airflow's TaskFlow API, allowing for the Pythonic definition of dependencies and data passing.
+
+As illustrated in Figure \ref{fig:airflow_dag}, the workflow is designed as a linear dependency chain of grouped tasks, ensuring that foundational data (Dimensions) is fully consistent before high-volume processing (Facts) begins.
+
+\begin{figure}[H]
+    \centering
+    % [IMPORTANT]: Take a screenshot of your Airflow Graph View and name it 'airflow_dag_graph.png'
+    % \includegraphics[width=1\textwidth]{imgs/airflow_dag_graph.png}
+    \caption{Visual representation of the Airflow DAG. The workflow progresses from static infrastructure setup (left) to parallelized daily processing (center), culminating in analytical modeling (right).}
+    \label{fig:airflow_dag}
+\end{figure}
+
+The specific responsibilities of the key tasks depicted in the diagram are as follows:
+
+\begin{itemize}
+    \item\texttt{create\_schemas}: Initializes the DuckLake schemas (\textit{bronze, silver, gold}) and the persistence layer for data quality logs.
+    \item\texttt{ingest\_[geo|static]}: A parallel group of tasks that extract reference data (Shapefiles, INE CSVs) from external web sources.
+    \item\texttt{build\_silver\_dimensions}: Performs SQL transformations to clean reference data and generate surrogate keys (e.g., \texttt{dim\_zones}).
+    \item\texttt{ensure\_fact\_tables\_exist}: A singleton task that prepares the destination tables for the mobility data, preventing race conditions during parallel writes.
+    \item\texttt{process\_single\_day}: The dynamic mapped task. Each instance handles the full ELT cycle (Download $\rightarrow$ Bronze $\rightarrow$ Silver) for a specific date within a transaction block.
+    \item\texttt{audit\_[dims|batch]}: Quality control gates that calculate metrics (e.g., null rates) and log them to the metadata registry.
+    \item\texttt{create\_gold\_[cluster|gaps]}: The final analytical steps that aggregate the fully processed Silver data into business-ready insights.
+\end{itemize}
+
+
+\subsection{Parallelized Ingestion and Processing}
+A critical requirement of the project was handling the high cardinality of daily mobility files (one file per day per year). Instead of a sequential loop, the implementation leverages Airflow's Dynamic Task Mapping.
+
+The \texttt{process\_single\_day} task is designed as an atomic worker. The DAG dynamically generates a list of dates based on the input parameters (\texttt{start\_date}, \texttt{end\_date}) and expands the worker task across this list using the \texttt{.expand()} method. This allows the system to scale horizontally; identifying 365 days results in 365 mapped task instances. Concurrency is managed via the \texttt{max\_active\_tis\_per\_dag} parameter (configured to 8 in the cloud environment) to optimize throughput without overwhelming the MITMA source servers or the DuckDB memory limits.
+
+\subsection{Transaction Management and ACID Compliance}
+To adhere to the Robustness objective, the pipeline implements strict transaction controls within the DuckDB connection context. Given the potential for network failures during the streaming of large compressed CSVs, avoiding partial data writes is paramount.
+
+The implementation wraps the Bronze ingestion and Silver transformation logic within a single database transaction block:
+\begin{itemize}
+    \item \textbf{Atomicity:} The worker task explicitly initiates a transaction using \texttt{con.begin()}. Both the Bronze insertion (raw data) and Silver transformation (fact table loading) must succeed together.
+    \item \textbf{Rollback Mechanism:} The logic is encapsulated in a \texttt{try...except} block. If any error occurs (e.g., a connection timeout or parsing error), \texttt{con.rollback()} is triggered immediately. This ensures that a failed run leaves no ghost data in the Silver layer, maintaining the lakehouse in a consistent state.
+\end{itemize}
+
+\subsection{Automated Analytical Modeling (Gold Layer)}
+Unlike standard ETL pipelines that stop at data cleaning, this implementation integrates advanced analytics directly into the workflow. Once the batch processing is complete and validated via the \texttt{audit\_batch\_results} task, the Gold layer construction begins.
+
+This phase is implemented via two distinct tasks:
+\begin{itemize}
+    \item \textbf{Clustering Analysis:} The \texttt{create\_gold\_clustering} task extracts normalized hourly profiles from the Silver layer into memory. It utilizes the \textit{Scikit-learn} library to perform K-Means clustering, determining typical mobility patterns (e.g., Weekday vs. Weekend). The results are materialized back into DuckDB tables for reporting.
+    \item \textbf{Gap Analysis:} The \texttt{create\_gold\_gaps} task performs a full-scan aggregation of the processed period, joining mobility flows with socio-economic metrics to calculate the Gravity Model mismatch ratios.
+\end{itemize}
+
+\subsection{Decoupled Data Serving}
+While the unified pipeline handles the heavy lifting of construction and modeling, the architecture is designed to support a decoupled reporting pattern for data consumption. 
+
+[TODO]
+
+
+\section{Results and Use Cases}
+% [GUIDE]: This corresponds to Page 4 and the "Results" requirement on Page 6.
+
+\subsection{Use Case 1: Typical Mobility Patterns}
+% [GUIDE]: Explain the Clustering (K-Means) approach.
+To characterize the "typical day," we aggregated hourly flows and applied K-Means clustering...
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.8\textwidth]{path/to/your/clustering_plot.png}
+    \caption{Hourly mobility profiles identified (Weekdays vs. Weekends).}
+    \label{fig:clusters}
+\end{figure}
+
+\subsection{Use Case 2: Infrastructure Gap Analysis}
+% [GUIDE]: Explain the Gravity Model implementation.
+We compared actual MITMA demand against theoretical demand derived from a gravity model:
+\begin{equation}
+    T_{ij} = k \cdot \frac{P_i \cdot E_j}{d_{ij}^2}
+\end{equation}
+The mismatch ratio calculated in the Gold layer highlights zones where actual transport usage significantly lags behind potential demand...
+
+\section{Discussion}
+% [GUIDE]: Discuss the value. How does this help the "Transport Expert"?
+The implemented lakehouse allows experts to query billions of rows using standard SQL without managing infrastructure...
+
+\section{Conclusions and Limitations}
+% [GUIDE]: Summarize success. Mention limitations (e.g., data quality issues in Oct/Nov 2023 mentioned in PDF Page 2).
+The project successfully established a scalable 3-tier architecture. However, limitations exist regarding data anomalies in late 2023...
+
+% --- BIBLIOGRAPHY ---
+\begin{thebibliography}{9}
+\bibitem{mitma}
+Spanish Ministry of Transport (MITMA). Open Data Mobility. \url{https://www.transportes.gob.es/ministerio/proyectos-singulares/estudios-de-movilidad-con-big-data/opendata-movilidad}
+
+\bibitem{ine}
+Spanish National Statistics Institute (INE). \url{https://www.ine.es/}
+
+\bibitem{cnig}
+Centro Nacional de Información Geográfica (CNIG). \url{https://www.ign.es/}
+
+\bibitem{madrid_data}
+Ayuntamiento de Madrid. Portal de Datos Abiertos. \url{https://datos.madrid.es/}
+
+
+\bibitem{duckdb}
+DuckDB Documentation. \url{https://duckdb.org/}
+
+\bibitem{ducklake}
+DuckLake. \textit{DuckLake Documentation}. \url{https://ducklake.select/docs/stable/}
+
+\bibitem{airflow}
+Apache Software Foundation. \textit{Apache Airflow Documentation}. \url{https://airflow.apache.org/}
+
+
+\end{thebibliography}
+
+\end{document}
