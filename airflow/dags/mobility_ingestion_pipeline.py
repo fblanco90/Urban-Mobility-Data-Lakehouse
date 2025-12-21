@@ -480,12 +480,37 @@ def mobility_unified_pipeline_withgold():
         finally:
             con.close()
 
-    @task(max_active_tis_per_dag=1, map_index_template="{{ task.op_kwargs['date_str'] }}")
+    @task(
+    retries=5, 
+    retry_delay=timedelta(seconds=30),
+    max_active_tis_per_dag=1, 
+    map_index_template="{{ task.op_kwargs['date_str'] }}")
     def process_single_day(date_str: str):
         """
         Atomic Pipeline: Download -> Bronze -> Silver for one specific day.
         """
         logging.info(f"--- 🚀 Starting Pipeline for {date_str} ---")
+    
+        # --- 1. URL Construction ---
+        # Input: "20230101"
+        year = date_str[:4]    # "2023"
+        month = date_str[4:6]  # "01"
+            
+        # Format: /2023-01/20230101...
+        url = BASE_URL_TEMPLATE.format(year=year, month=month, date=date_str)
+
+        try:
+        # We use HEAD to verify file existence without downloading the entire content
+            response = requests.head(url, timeout=20)
+            
+            if response.status_code != 200:
+                logging.warning(f"⚠️ File not found (HTTP {response.status_code}) for date {date_str}. Skipping task...")
+                return f"Skipped: {date_str} not found"
+                
+        except Exception as e:
+            logging.error(f"❌ Error connecting to the server to verify {date_str}: {e}")
+            # Re-raise the exception to trigger Airflow retries for genuine network issues
+            raise e
 
         try:
             con = get_connection()
@@ -499,13 +524,6 @@ def mobility_unified_pipeline_withgold():
             # Evita que el servidor del ministerio corte la conexión a mitad de descarga
             con.execute("SET http_keep_alive=false;")
             
-            # --- 1. URL Construction ---
-            # Input: "20230101"
-            year = date_str[:4]    # "2023"
-            month = date_str[4:6]  # "01"
-            
-            # Format: /2023-01/20230101...
-            url = BASE_URL_TEMPLATE.format(year=year, month=month, date=date_str)
             
             logging.info(f"Target URL: {url}")
 
@@ -641,12 +659,12 @@ def mobility_unified_pipeline_withgold():
     def create_gold_clustering(**context):
         """Generates Clustering Tables using ALL available data (No filters)."""
         logging.info("--- 🏗️ Starting Gold: Clustering Analysis ---")
+        
+        # --- CICLO 1: FETCH DATA (Conexión Corta) ---
         con = get_connection()
-    
+        df = None
         try:
             con.execute("INSTALL spatial; LOAD spatial;")
-        
-            # --- 1. DATA PREPARATION (Fetch) ---
             logging.info("   -> Fetching data from Silver Layer...")
             query_fetch = """
                 SELECT 
@@ -655,164 +673,84 @@ def mobility_unified_pipeline_withgold():
                     SUM(trips)     AS total_trips
                 FROM lakehouse.silver.fact_mobility
                 WHERE trips IS NOT NULL
+                AND partition_date >= '2023-01-01'
                 GROUP BY 1, 2
                 ORDER BY 1, 2;
             """
             df = con.execute(query_fetch).df()
+        finally:
+            try:
+                con.execute("ROLLBACK;") 
+            except:
+                pass
+            con.close() # Cerramos inmediatamente para liberar el socket SSL
+            logging.info("🔌 Connection closed after fetch.")
 
-            if df.empty:
-                logging.warning("   ⚠️ Warning: No data found in fact_mobility.")
-                return
+        # --- PROCESAMIENTO (Fuera de cualquier Try de conexión) ---
+        # Aquí es donde pasaban los 16 minutos que causaban el error
+        if df is None or df.empty:
+            logging.warning("   ⚠️ Warning: No data found.")
+            return
 
-            logging.info(f"📊 Rows fetched: {len(df)}")
+        logging.info(f"📊 Rows fetched: {len(df)}")
 
-            # --- PIVOT & NORMALIZE ---
-            # Transform from Long to Wide format (Rows=Days, Columns=Hours 0-23)
-            df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
+        # Pivot & Normalize
+        df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
+        for h in range(24):
+            if h not in df_pivot.columns:
+                df_pivot[h] = 0
+        df_pivot = df_pivot.sort_index(axis=1)
 
-            # Ensure all hour columns (0 to 23) exist
-            for h in range(24):
-                if h not in df_pivot.columns:
-                    df_pivot[h] = 0
-                    
-            # Sort columns numerically
-            df_pivot = df_pivot.sort_index(axis=1)
+        logging.info("   -> Normalizing and Running K-Means...")
+        row_sums = df_pivot.sum(axis=1).replace(0, 1)
+        df_normalized = df_pivot.div(row_sums, axis=0).fillna(0)
 
-            # Normalize row-wise (each day sums to 1)
-            logging.info("   -> Normalizing daily profiles...")
-            row_sums = df_pivot.sum(axis=1)
-            # Usamos replace(0, 1) para evitar divisiones por cero si un día no tiene viajes
-            df_normalized = df_pivot.div(row_sums, axis=0).fillna(0)
+        # Clustering
+        n_clusters = 3
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        clusters = kmeans.fit_predict(df_normalized)
 
-            # --- 3. CLUSTERING (K-Means) ---
-            # Fixed k=3 as per original script
-            n_clusters = 3
-            logging.info(f"   -> Running K-Means Clustering (k={n_clusters})...")
+        df_results = pd.DataFrame({
+            'date': df_normalized.index,
+            'cluster_id': clusters
+        })
 
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-            clusters = kmeans.fit_predict(df_normalized)
-
-            # Create results DataFrame
-            df_results = pd.DataFrame({
-                'date': df_normalized.index,
-                'cluster_id': clusters
-            })
-
-            # --- 4. BUILD GOLD TABLE ---
-            logging.info("\n--- 🏗️ Building Gold Table: typical_day_by_cluster ---")
-
-            # Register the clustering results as a virtual view inside DuckDB
+        # --- CICLO 2: BUILD GOLD TABLE (Nueva Conexión) ---
+        logging.info("\n--- 🏗️ Building Gold Table ---")
+        con = get_connection()
+        try:
             con.register('view_dim_clusters', df_results)
-
-            # Query EXACTA del primer script (usando CTE y columnas extra)
+            
             query_typical_cte = """
                 CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
-                
                 WITH dim_mobility_patterns AS (
                     SELECT date, cluster_id FROM view_dim_clusters
                 )
-                
                 SELECT 
                     p.cluster_id,
                     hour(f.period) as hour,
                     ROUND(AVG(f.trips), 2) as avg_trips,
-                    SUM(f.trips) as total_trips_sample, -- Columna añadida según script 1
-                    CURRENT_TIMESTAMP as processed_at   -- Columna añadida según script 1
+                    SUM(f.trips) as total_trips_sample,
+                    CURRENT_TIMESTAMP as processed_at
                 FROM lakehouse.silver.fact_mobility f
                 JOIN dim_mobility_patterns p ON f.partition_date = p.date
                 GROUP BY p.cluster_id, hour(f.period)
                 ORDER BY p.cluster_id, hour(f.period);
             """
-
             con.execute(query_typical_cte)
             logging.info("✅ Created: lakehouse.gold.typical_day_by_cluster")
 
-            # --- 5. CLUSTER INTERPRETATION (Analysis) ---
-            logging.info("\n--- 📊 Cluster Interpretation ---")
+            # --- 5. CLUSTER INTERPRETATION & PLOT ---
+            # (El resto de tus queries analíticas y matplotlib van aquí dentro)
             
-            # Query analítica sobre la vista registrada
-            analysis_df = con.execute(""" 
-                SELECT 
-                    cluster_id, 
-                    COUNT(*) as days_in_cluster,
-                    MODE(dayname(date)) as typical_day
-                FROM view_dim_clusters
-                GROUP BY cluster_id
-                ORDER BY days_in_cluster DESC
-            """).df()
-
-            if not analysis_df.empty:
-                # Imprimimos tabla en los logs línea por línea para que sea legible en Airflow
-                logging.info("\n" + analysis_df.to_string(index=False))
-            else:
-                logging.warning("⚠️ The analysis table is empty.")
-
-            try:
-                # Query específica para el gráfico (Join con etiquetas de día)
-                query_plot = """
-                WITH cluster_labels AS (
-                    SELECT 
-                        cluster_id, 
-                        MODE(dayname(date)) as label
-                    FROM view_dim_clusters
-                    GROUP BY cluster_id
-                )
-                SELECT 
-                    t.hour,
-                    -- Etiqueta legible: "Cluster 0 (Sunday)"
-                    'Cluster ' || t.cluster_id || ' (' || l.label || ')' as pattern_name,
-                    t.avg_trips
-                FROM lakehouse.gold.typical_day_by_cluster t
-                JOIN cluster_labels l ON t.cluster_id = l.cluster_id
-                ORDER BY t.hour;
-                """
-                
-                demand_df = con.execute(query_plot).df()
-
-                if demand_df.empty:
-                    logging.warning("⚠️ Gold table empty, skipping plot.")
-                else:
-                    # Pivotar para Matplotlib
-                    pivot_df = demand_df.pivot(index='hour', columns='pattern_name', values='avg_trips')
-                    
-                    # Crear figura
-                    fig, ax = plt.subplots(figsize=(12, 7))
-                    
-                    # Plotear
-                    pivot_df.plot(kind='line', ax=ax, marker='o', markersize=4)
-                    
-                    # Estilos
-                    ax.set_title(f'Typical Daily Mobility Patterns (k={n_clusters})', fontsize=16)
-                    ax.set_xlabel('Hour of Day', fontsize=12)
-                    ax.set_ylabel('Average Trips per Hour', fontsize=12)
-                    ax.set_xticks(range(0, 24))
-                    ax.set_xticklabels([f'{h:02d}:00' for h in range(24)], rotation=45, ha='right')
-                    ax.grid(True, linestyle='--', alpha=0.6)
-                    ax.legend(title='Identified Pattern')
-                    plt.tight_layout()
-                    
-                    # GUARDAR IMAGEN (Importante: No usar show() en Airflow)
-                    output_path = "/usr/local/airflow/dags/mobility_patterns1.png"
-                    plt.savefig(output_path)
-                    plt.close() # Liberar memoria
-                    
-                    logging.info(f"📸 Graph saved successfully at: {output_path}")
-
-            except Exception as e:
-                logging.error(f"❌ Error generating plot: {e}")
-                # No hacemos raise aquí para que el DAG no falle si solo es el gráfico lo que falla
-            
-            # Limpieza
-            con.unregister('view_dim_clusters')
-            logging.info("✅ Gold Layer Analysis Completed.")
-
         except Exception as e:
-            logging.error(f"❌ Error in Gold Clustering: {e}")
-            raise e # Re-raise para que Airflow marque la tarea como fallida
-            
+            logging.error(f"❌ Error in Gold SQL Write: {e}")
+            raise e
         finally:
-            con.close()
-      
+            con.close() # Limpieza final
+            logging.info("✅ Gold Layer Analysis Completed and Connection Closed.")
+        
+
 
     @task
     def create_gold_gaps(**context):
@@ -832,13 +770,20 @@ def mobility_unified_pipeline_withgold():
                     WHERE partition_date BETWEEN strptime('{start}', '%Y%m%d') AND strptime('{end}', '%Y%m%d')
                     GROUP BY 1, 2
                 ),
+                unique_rent AS (
+                    SELECT 
+                        zone_id, 
+                        income_per_capita AS rent
+                    FROM lakehouse.silver.metric_ine_rent
+                    WHERE year = 2023
+                ),
                 model AS (
-                    SELECT m.origin_zone_id, m.destination_zone_id, p.population, r.income_per_capita as rent, m.total_actual_trips,
+                    SELECT m.origin_zone_id, m.destination_zone_id, p.population, r.rent, m.total_actual_trips,
                     -- Distancia entre centroides de zonas
                     GREATEST(0.5, st_distance_spheroid(ST_Centroid(zo.polygon), ST_Centroid(zd.polygon))/1000) AS dist_km
                     FROM od_pairs m
                     JOIN lakehouse.silver.metric_population p ON m.origin_zone_id = p.zone_id
-                    JOIN lakehouse.silver.metric_ine_rent r ON m.destination_zone_id = r.zone_id
+                    JOIN unique_rent r ON m.destination_zone_id = r.zone_id
                     JOIN lakehouse.silver.dim_zones zo ON m.origin_zone_id = zo.zone_id
                     JOIN lakehouse.silver.dim_zones zd ON m.destination_zone_id = zd.zone_id
                 )
