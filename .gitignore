@@ -29,4 +29,4 @@ airflow/*
 
 airflow/dags/.airflowignore
 
-print_info.ipynb
+airflow/dags/print_info.ipynb
