@@ -66,7 +66,7 @@ The Bronze layer creates a raw, immutable, and performant copy of the source dat
 -   **Status:** The Bronze layer is complete and validated for the Sprint 1 sample data.
 
 - **Schema:**
-    - ![alt text](../diagrams/Bronze_Schema_diagram.png)
+    - ![alt text](../diagrams/Sprint1/Bronze_Schema_diagram.png)
 
 ---
 
@@ -142,7 +142,7 @@ This view serves as a powerful **dimensional summary table** describing the stru
 - **Audit Trail**: Preserved original filenames and ingestion timestamps for traceability of the mobility
 - **Data Typing**: Ensured proper data types for efficient storage and query performance
 - **Schema:**
-    - ![alt text](../diagrams/Silver_Schema_diagram.png)
+    - ![alt text](../diagrams/Sprint1/Silver_Schema_diagram.png)
 
 ---
 
@@ -213,5 +213,5 @@ LOAD 'spatial';
 
 **Schema Design:**
 - **Schema:**
-    - ![alt text](../diagrams/Gold_Schema_diagram.png)
+    - ![alt text](../diagrams/Sprint1/Gold_Schema_diagram.png)
 ---
