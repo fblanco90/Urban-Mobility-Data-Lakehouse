@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt 
 from pyspainmobility import Zones
+from datetime import timedelta
 
 # ==============================================================================
 # CONFIGURATION
@@ -80,19 +81,20 @@ def mobility_unified_pipeline_withgold():
         logging.info("✅ Schemas & Log table ready.")
         con.close()
 
-    @task
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def ingest_geo_data():
         logging.info("Starting Geo Ingestion via pyspainmobility...")
         con = get_connection()
         zones_api = Zones(zones="municipios", version=2)
         gdf = zones_api.get_zone_geodataframe()
         if gdf.crs is None: gdf.set_crs(epsg=4326, inplace=True)
+
+        if 'id' not in gdf.columns:
+            raise ValueError("GeoDataFrame is missing the 'id' column")
+
         gdf['wkt_polygon'] = gdf.geometry.to_wkt()
 
-        if 'ID' in gdf.columns:
-            gdf.rename(columns={'ID': 'id'}, inplace=True)
-        else:
-            gdf['id'] = gdf.index
+        logging.info(f"Geo columns: {list(gdf.columns)}")       
         
         df_export = pd.DataFrame(gdf.drop(columns=['geometry']))
         df_export['filename'] = 'pyspainmobility_api_v2'
@@ -101,6 +103,10 @@ def mobility_unified_pipeline_withgold():
         
         con.register('df_view', df_export)
         con.execute("CREATE OR REPLACE TABLE lakehouse.bronze.geo_municipalities AS SELECT * FROM df_view")
+        con.execute("SELECT * FROM lakehouse.bronze.geo_municipalities LIMIT 5;")
+        rows = con.fetchall()
+        logging.info(rows)
+
         con.close()
 
     @task
@@ -474,7 +480,7 @@ def mobility_unified_pipeline_withgold():
         finally:
             con.close()
 
-    @task(max_active_tis_per_dag=2, map_index_template="{{ task.op_kwargs['date_str'] }}")
+    @task(max_active_tis_per_dag=1, map_index_template="{{ task.op_kwargs['date_str'] }}")
     def process_single_day(date_str: str):
         """
         Atomic Pipeline: Download -> Bronze -> Silver for one specific day.
