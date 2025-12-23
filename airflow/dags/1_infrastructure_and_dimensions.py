@@ -1,7 +1,9 @@
 from datetime import timedelta
+from itertools import count
 from airflow.decorators import dag, task
 from utils_db import get_connection
 import logging
+import requests
 
 @dag(
     dag_id="infraestructure_and_dimensions",
@@ -31,10 +33,49 @@ def infrastructure_and_dimensions():
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_geo_data():
-        with get_connection() as con:
-            pass
+        table_name = 'geo_municipalities'
+        base_url = 'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios'
+        extensions = ['.shp', '.dbf', '.shx', '.prj']
+        missing_files = []
 
-    @task
+        try:
+            for ext in extensions:
+                url = f"{base_url}{ext}"
+                response = requests.head(url, allow_redirects=True, timeout=20)
+                
+                if response.status_code != 200:
+                    missing_files.append(ext)
+                
+            if missing_files:
+                error_msg = f"Ingestion aborted. Missing extensions for {table_name}: {missing_files}"
+                logging.info(error_msg)
+                raise FileNotFoundError(error_msg)
+        
+        except Exception as e:
+            logging.error(f"Ingestion aborted. Missing extensions for {table_name}: {missing_files}")
+            raise e
+        
+        logging.info(f"All files found. Starting spatial ingestion for {table_name}.")
+        
+        with get_connection() as con:
+            query = f"""
+                CREATE OR REPLACE TABLE lakehouse.bronze.{table_name} AS 
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP as ingestion_timestamp,
+                    '{base_url}.shp' as source_url
+                FROM ST_Read('{base_url}.shp');
+            """
+            con.execute(query)
+            logging.info(f"✅ {table_name} (Spatial) correctly ingested.")
+
+            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
+            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
+            col_names = [c[0] for c in cols]
+        
+        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_zoning_municipalities():
         table_name = 'zoning_municipalities'
         url = 'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/nombres_municipios.csv'
@@ -43,14 +84,49 @@ def infrastructure_and_dimensions():
         encoding = 'utf-8'
 
         # Check url
-        if True: # <-- Change logic here
-            logging.info(f"File for {table_name} unavailable.")
-        else: # Only if ok then -> conection
-            with get_connection() as con:
-                pass
-                logging.info(f"✅ {table_name} correctly ingested.")
-    
-    @task
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=10)
+            
+            if response.status_code != 200:
+                error_msg = f"Ingestion aborted. Missing file for {table_name}."
+                logging.error(error_msg)                
+                raise FileNotFoundError(error_msg)
+        
+        except Exception as e:
+            logging.error(f"❌ Error checking/ingesting files ({url}): {e}")
+            raise e
+
+        logging.info(f"File found. Starting ingestion for {table_name}.")
+        
+        with get_connection() as con:
+            query = f"""
+                CREATE OR REPLACE TABLE lakehouse.bronze.{table_name} AS 
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP as ingestion_timestamp,
+                    '{url}' as source_url
+                FROM read_csv_auto('{url}', 
+                    all_varchar=true, 
+                    filename=true, 
+                    sep='{sep}', 
+                    header={header},
+                    encoding='{encoding}',
+                    ignore_errors=true
+                );
+            """
+            con.execute(query)
+            logging.info(f"✅ {table_name} correctly ingested.")
+            
+            # Check row count and columns
+            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
+            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
+            col_names = [c[0] for c in cols]
+
+        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+
+
+       
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_population_municipalities():
         table_name = 'population_municipalities'
         url = 'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv'
@@ -59,14 +135,47 @@ def infrastructure_and_dimensions():
         encoding = 'utf-8'
 
         # Check url
-        if True: # <-- Change logic here
-            logging.info(f"File for {table_name} unavailable.")
-        else: # Only if ok then -> conection
-            with get_connection() as con:
-                pass # Logic here
-                logging.info(f"✅ {table_name} correctly ingested.")
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=10)
             
-    @task
+            if response.status_code != 200:
+                error_msg = f"Ingestion aborted. Missing file for {table_name}."
+                logging.error(error_msg)                
+                raise FileNotFoundError(error_msg)
+        
+        except Exception as e:
+            logging.error(f"❌ Error checking/ingesting files ({url}): {e}")
+            raise e
+        
+        logging.info(f"File found. Starting ingestion for {table_name}.")
+
+        with get_connection() as con:
+            query = f"""
+                CREATE OR REPLACE TABLE lakehouse.bronze.{table_name} AS 
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP as ingestion_timestamp,
+                    '{url}' as source_url
+                FROM read_csv_auto('{url}', 
+                    all_varchar=true, 
+                    filename=true, 
+                    sep='{sep}', 
+                    header={header},
+                    encoding='{encoding}',
+                    ignore_errors=true
+                );
+            """
+            con.execute(query)
+            logging.info(f"✅ {table_name} correctly ingested.")
+            
+            # Check row count and columns
+            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
+            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
+            col_names = [c[0] for c in cols]
+        
+        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_mapping_ine_mitma():
         table_name = 'mapping_ine_mitma'
         url = 'https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv'
@@ -75,14 +184,49 @@ def infrastructure_and_dimensions():
         encoding = 'utf-8'
 
         # Check url
-        if True: # <-- Change logic here
-            logging.info(f"File for {table_name} unavailable.")
-        else: # Only if ok then -> conection
-            with get_connection() as con:
-                pass # Logic here
-                logging.info(f"✅ {table_name} correctly ingested.")
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=10)
+            
+            if response.status_code != 200:
+                error_msg = f"Ingestion aborted. Missing file for {table_name}."
+                logging.error(error_msg)                
+                raise FileNotFoundError(error_msg)
         
-    @task
+        except Exception as e:
+            logging.error(f"❌ Error checking/ingesting files ({url}): {e}")
+            raise e
+        
+        logging.info(f"File found. Starting ingestion for {table_name}.")
+        
+        with get_connection() as con:
+            query = f"""
+                CREATE OR REPLACE TABLE lakehouse.bronze.{table_name} AS 
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP as ingestion_timestamp,
+                    '{url}' as source_url
+                FROM read_csv_auto('{url}', 
+                    all_varchar=true, 
+                    filename=true, 
+                    sep='{sep}', 
+                    header={header},
+                    encoding='{encoding}',
+                    ignore_errors=true
+                );
+            """
+            con.execute(query)
+            logging.info(f"✅ {table_name} correctly ingested.")
+
+            # Check row count and columns
+            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
+            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
+            col_names = [c[0] for c in cols]
+        
+        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+
+
+
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_work_calendars():
         table_name = 'work_calendars'
         url = 'https://datos.madrid.es/egob/catalogo/300082-4-calendario_laboral.csv'
@@ -91,30 +235,99 @@ def infrastructure_and_dimensions():
         encoding = 'utf-8'
 
         # Check url
-        if True: # <-- Change logic here
-            logging.info(f"File for {table_name} unavailable.")
-        else: # Only if ok then -> conection
-            with get_connection() as con:
-                pass # Logic here
-                logging.info(f"✅ {table_name} correctly ingested.")
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=10)
+            
+            if response.status_code != 200:
+                error_msg = f"Ingestion aborted. Missing file for {table_name}."
+                logging.error(error_msg)                
+                raise FileNotFoundError(error_msg)
         
-    @task
+        except Exception as e:
+            logging.error(f"❌ Error checking/ingesting files ({url}): {e}")
+            raise e
+        
+        logging.info(f"File found. Starting ingestion for {table_name}.")
+        
+        with get_connection() as con:
+            query = f"""
+                CREATE OR REPLACE TABLE lakehouse.bronze.{table_name} AS 
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP as ingestion_timestamp,
+                    '{url}' as source_url
+                FROM read_csv_auto('{url}', 
+                    all_varchar=true, 
+                    filename=true, 
+                    sep='{sep}', 
+                    header={header},
+                    encoding='{encoding}',
+                    ignore_errors=true
+                );
+            """
+            con.execute(query)
+            logging.info(f"✅ {table_name} correctly ingested.")
+            
+            # Check row count and columns
+            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
+            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
+            col_names = [c[0] for c in cols]
+        
+        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+
+
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_ine_rent_municipalities():
-        table_name = 'work_calendars'
+        table_name = 'ine_rent_municipalities'
         url = 'https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1'
         sep = '\t'
         header = True
         encoding = 'utf-8'
 
         # Check url
-        if True: # <-- Change logic here (code != 200)
-            logging.info(f"File for {table_name} unavailable.")
-        else: # Only if ok then -> conection
-            with get_connection() as con:
-                pass # Logic here
-                logging.info(f"✅ {table_name} correctly ingested.")
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=10)
+            
+            if response.status_code != 200:
+                error_msg = f"Ingestion aborted. Missing file for {table_name}."
+                logging.error(error_msg)                
+                raise FileNotFoundError(error_msg)
         
-    @task
+        except Exception as e:
+            logging.error(f"❌ Error checking/ingesting files ({url}): {e}")
+            raise e
+        
+        logging.info(f"File found. Starting ingestion for {table_name}.")
+        
+        with get_connection() as con:
+            query = f"""
+                CREATE OR REPLACE TABLE lakehouse.bronze.{table_name} AS 
+                SELECT 
+                    *,
+                    CURRENT_TIMESTAMP as ingestion_timestamp,
+                    '{url}' as source_url
+                FROM read_csv_auto('{url}', 
+                    all_varchar=true, 
+                    filename=true, 
+                    sep='{sep}', 
+                    header={header},
+                    encoding='{encoding}',
+                    ignore_errors=true
+                );
+            """
+            con.execute(query)
+            logging.info(f"✅ {table_name} correctly ingested.")
+            
+            # Check row count and columns
+            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
+            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
+            col_names = [c[0] for c in cols]
+        
+        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+
+
+
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_dim_zones():
         logging.info("Building Silver: dim_zones")
         with get_connection() as con:
@@ -148,7 +361,7 @@ def infrastructure_and_dimensions():
                     mitma_code,
                     ine_code,
                     zone_name,
-                    ST_GeomFromText(g.wkt_polygon) AS polygon,
+                    g.geom AS polygon,
                     CURRENT_TIMESTAMP AS processed_at
                     
                 FROM raw_zones r
@@ -161,7 +374,7 @@ def infrastructure_and_dimensions():
             count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.dim_zones").fetchone()[0]
         logging.info(f"✅ Table created: lakehouse.silver.dim_zones ({count} rows)")
 
-    @task
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_metric_population():
         logging.info("Building Silver: metric_population")
         with get_connection() as con:
@@ -190,9 +403,10 @@ def infrastructure_and_dimensions():
                     AND NOT regexp_matches(column1, '[a-zA-Z]') -- Exclude rows where population contains letters
             """)
             count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.metric_population").fetchone()[0]
+        
         logging.info(f"✅ Table created: lakehouse.silver.metric_population ({count} rows)")
          
-    @task
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_metric_ine_rent():
         logging.info("Building Silver: metric_ine_rent")
         with get_connection() as con:
@@ -232,9 +446,10 @@ def infrastructure_and_dimensions():
                     AND z.zone_id IS NOT NULL;
             """)
             count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.metric_ine_rent").fetchone()[0]
+        
         logging.info(f"✅ Table created: lakehouse.silver.metric_ine_rent ({count} rows)")
         
-    @task
+    @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_dim_zone_holidays():
         logging.info("Building Silver: dim_zone_holidays")
         with get_connection() as con:
@@ -264,46 +479,9 @@ def infrastructure_and_dimensions():
                 ORDER BY z.zone_id, nd.holiday_date;
             """)
             count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.dim_zone_holidays").fetchone()[0]
+        
         logging.info(f"✅ Table created: lakehouse.silver.dim_zone_holidays ({count} rows)")
 
-    @task
-    def audit_dimensions():
-        logging.info("🕵️ Starting Data Quality Audit for Dimensions.")
-
-        # Helper to insert into log
-        def log_metric(table, metric, value, notes=''):
-            safe_val = value if value is not None else 0.0
-            query = f"""
-                INSERT INTO lakehouse.silver.data_quality_log 
-                VALUES (CURRENT_TIMESTAMP, '{table}', '{metric}', {safe_val}, '{notes}')
-            """
-            con.execute(query)
-            logging.info(f"   -> Audited {table}: {metric} = {safe_val}")
-
-        with get_connection() as con:
-            # 1. Zone Checks
-            missing_ine = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones WHERE ine_code IS NULL").fetchone()[0]
-            log_metric('dim_zones', 'zones_missing_ine_code', missing_ine)
-
-            missing_geo = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones WHERE polygon IS NULL").fetchone()[0]
-            log_metric('dim_zones', 'zones_missing_geo_coords', missing_geo)
-            
-            zone_count = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones").fetchone()[0]
-            log_metric('dim_zones', 'total_zones', zone_count)
-
-            # 2. Population Checks
-            pop_sum = con.execute("SELECT SUM(population) FROM lakehouse.silver.metric_population").fetchone()[0]
-            log_metric('metric_population', 'total_population_sum', pop_sum, 'Spain Total')
-
-            avg_rent = con.execute("SELECT AVG(income_per_capita) FROM lakehouse.silver.metric_ine_rent").fetchone()[0]
-            log_metric('metric_ine_rent', 'avg_income_per_capita', avg_rent, 'National Avg')
-            
-            rent_coverage = con.execute("""
-                SELECT (SELECT COUNT(DISTINCT zone_id) FROM lakehouse.silver.metric_ine_rent) * 100.0 / NULLIF((SELECT COUNT(*) FROM lakehouse.silver.dim_zones), 0)
-            """).fetchone()[0]
-            log_metric('metric_ine_rent', 'income_data_coverage_pct', rent_coverage)
-        
-        logging.info("🕵️ Dimensions audited.")
 
     # ==============================================================================
     # ORCHESTRATION FLOW
@@ -326,9 +504,6 @@ def infrastructure_and_dimensions():
     task_metric_rent = sl_ingest_metric_ine_rent()
     task_dim_holidays = sl_ingest_dim_zone_holidays()
 
-    # Audit
-    task_audit = audit_dimensions()
-
     # Dependencies
     task_schemas >> task_stats
     task_stats >> [
@@ -350,8 +525,6 @@ def infrastructure_and_dimensions():
 
     task_dim_zones >> task_dim_holidays
     task_calendars >> task_dim_holidays
-
-    [task_metric_pop, task_metric_rent, task_dim_holidays] >> task_audit
 
 infrastructure_and_dimensions()
 
