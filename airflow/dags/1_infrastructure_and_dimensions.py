@@ -6,11 +6,11 @@ import logging
 import requests
 
 @dag(
-    dag_id="infraestructure_and_dimensions",
+    dag_id="infrastructure_and_dimensions",
     schedule=None,
     catchup=False,
     # max_active_tasks=2,
-    tags=['infrastrucure']    
+    tags=['infrastructure']    
 )
 def infrastructure_and_dimensions():
 
@@ -67,13 +67,8 @@ def infrastructure_and_dimensions():
                 FROM ST_Read('{base_url}.shp');
             """
             con.execute(query)
-            logging.info(f"✅ {table_name} (Spatial) correctly ingested.")
-
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
-            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
-            col_names = [c[0] for c in cols]
         
-        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+        logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_zoning_municipalities():
@@ -85,7 +80,7 @@ def infrastructure_and_dimensions():
 
         # Check url
         try:
-            response = requests.head(url, allow_redirects=True, timeout=10)
+            response = requests.head(url, allow_redirects=True, timeout=20)
             
             if response.status_code != 200:
                 error_msg = f"Ingestion aborted. Missing file for {table_name}."
@@ -115,17 +110,9 @@ def infrastructure_and_dimensions():
                 );
             """
             con.execute(query)
-            logging.info(f"✅ {table_name} correctly ingested.")
-            
-            # Check row count and columns
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
-            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
-            col_names = [c[0] for c in cols]
 
-        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
-
-
-       
+        logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
+  
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_population_municipalities():
         table_name = 'population_municipalities'
@@ -136,7 +123,7 @@ def infrastructure_and_dimensions():
 
         # Check url
         try:
-            response = requests.head(url, allow_redirects=True, timeout=10)
+            response = requests.head(url, allow_redirects=True, timeout=20)
             
             if response.status_code != 200:
                 error_msg = f"Ingestion aborted. Missing file for {table_name}."
@@ -166,14 +153,8 @@ def infrastructure_and_dimensions():
                 );
             """
             con.execute(query)
-            logging.info(f"✅ {table_name} correctly ingested.")
-            
-            # Check row count and columns
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
-            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
-            col_names = [c[0] for c in cols]
         
-        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
+        logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_mapping_ine_mitma():
@@ -185,7 +166,7 @@ def infrastructure_and_dimensions():
 
         # Check url
         try:
-            response = requests.head(url, allow_redirects=True, timeout=10)
+            response = requests.head(url, allow_redirects=True, timeout=20)
             
             if response.status_code != 200:
                 error_msg = f"Ingestion aborted. Missing file for {table_name}."
@@ -215,16 +196,8 @@ def infrastructure_and_dimensions():
                 );
             """
             con.execute(query)
-            logging.info(f"✅ {table_name} correctly ingested.")
-
-            # Check row count and columns
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
-            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
-            col_names = [c[0] for c in cols]
         
-        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
-
-
+        logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_work_calendars():
@@ -236,7 +209,7 @@ def infrastructure_and_dimensions():
 
         # Check url
         try:
-            response = requests.head(url, allow_redirects=True, timeout=10)
+            response = requests.head(url, allow_redirects=True, timeout=20)
             
             if response.status_code != 200:
                 error_msg = f"Ingestion aborted. Missing file for {table_name}."
@@ -266,15 +239,8 @@ def infrastructure_and_dimensions():
                 );
             """
             con.execute(query)
-            logging.info(f"✅ {table_name} correctly ingested.")
-            
-            # Check row count and columns
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
-            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
-            col_names = [c[0] for c in cols]
         
-        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
-
+        logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def br_ingest_ine_rent_municipalities():
@@ -286,7 +252,7 @@ def infrastructure_and_dimensions():
 
         # Check url
         try:
-            response = requests.head(url, allow_redirects=True, timeout=10)
+            response = requests.head(url, allow_redirects=True, timeout=20)
             
             if response.status_code != 200:
                 error_msg = f"Ingestion aborted. Missing file for {table_name}."
@@ -316,23 +282,15 @@ def infrastructure_and_dimensions():
                 );
             """
             con.execute(query)
-            logging.info(f"✅ {table_name} correctly ingested.")
-            
-            # Check row count and columns
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.bronze.{table_name}").fetchone()[0]
-            cols = con.execute(f"DESCRIBE lakehouse.bronze.{table_name}").fetchall()
-            col_names = [c[0] for c in cols]
         
-        logging.info(f"✅ {table_name}: {count} rows. Columns: {col_names}")
-
-
+        logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_dim_zones():
         logging.info("Building Silver: dim_zones")
         with get_connection() as con:
-            query_dim_zones = """
-            CREATE OR REPLACE TABLE lakehouse.silver.dim_zones AS
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.dim_zones AS
                 WITH unique_mapping AS (
                     SELECT DISTINCT 
                         CAST(municipio_mitma AS VARCHAR) as mitma_ref,
@@ -368,11 +326,9 @@ def infrastructure_and_dimensions():
                 JOIN lakehouse.bronze.geo_municipalities g
                     ON TRIM(CAST(g.id AS VARCHAR)) = CAST(r.mitma_code AS VARCHAR)
                 ORDER BY zone_id;
-            """
-            con.execute(query_dim_zones)
-            # This we can remove later
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.dim_zones").fetchone()[0]
-        logging.info(f"✅ Table created: lakehouse.silver.dim_zones ({count} rows)")
+            """)
+
+        logging.info(f"✅ Table created succesfully: lakehouse.silver.dim_zones")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_metric_population():
@@ -402,9 +358,8 @@ def infrastructure_and_dimensions():
                     -- Filter out the header row (if the first row contains text like 'ID' or 'Poblacion')
                     AND NOT regexp_matches(column1, '[a-zA-Z]') -- Exclude rows where population contains letters
             """)
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.metric_population").fetchone()[0]
         
-        logging.info(f"✅ Table created: lakehouse.silver.metric_population ({count} rows)")
+        logging.info(f"✅ Table created succesfully: lakehouse.silver.metric_population")
          
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_metric_ine_rent():
@@ -445,9 +400,8 @@ def infrastructure_and_dimensions():
                     AND TRY_CAST(REPLACE(r.Total, '.', '') AS DOUBLE) IS NOT NULL
                     AND z.zone_id IS NOT NULL;
             """)
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.metric_ine_rent").fetchone()[0]
         
-        logging.info(f"✅ Table created: lakehouse.silver.metric_ine_rent ({count} rows)")
+        logging.info(f"✅ Table created succesfully: lakehouse.silver.metric_ine_rent")
         
     @task(retries=3, retry_delay=timedelta(minutes=1))
     def sl_ingest_dim_zone_holidays():
@@ -478,10 +432,8 @@ def infrastructure_and_dimensions():
                 
                 ORDER BY z.zone_id, nd.holiday_date;
             """)
-            count = con.execute(f"SELECT COUNT(*) FROM lakehouse.silver.dim_zone_holidays").fetchone()[0]
         
-        logging.info(f"✅ Table created: lakehouse.silver.dim_zone_holidays ({count} rows)")
-
+        logging.info(f"✅ Table created succesfully: lakehouse.silver.dim_zone_holidays")
 
     # ==============================================================================
     # ORCHESTRATION FLOW
@@ -505,8 +457,8 @@ def infrastructure_and_dimensions():
     task_dim_holidays = sl_ingest_dim_zone_holidays()
 
     # Dependencies
-    task_schemas >> task_stats
-    task_stats >> [
+    task_schemas >> [
+        task_stats,
         task_geo, 
         task_zoning, 
         task_pop, 
