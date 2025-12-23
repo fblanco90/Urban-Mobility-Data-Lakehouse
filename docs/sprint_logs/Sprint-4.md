@@ -65,4 +65,6 @@ NOT Unique DAG for ingestion. DAGs redesign:
     - We can generate gold tables only when we have enough data
 - DAG 4: Controller of all 3 ingestion DAGs together (just if needed)
     - Just in case it could be so easy to use to execute all the flux with all the days needed
-- DAG 5: Query gold and generate data
+- DAG 5.1: Query gold and generate data for Bussines question 1
+- DAG 5.2: Query gold and generate data for Bussines question 2
+- DAG 5.3: Query gold and generate data for Bussines question 3 (our bussines question)
