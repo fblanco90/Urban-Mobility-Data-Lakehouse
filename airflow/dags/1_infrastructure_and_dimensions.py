@@ -309,8 +309,6 @@ def infrastructure_and_dimensions():
     # ORCHESTRATION FLOW
     # ==============================================================================
 
-    # 1. Instantiate Tasks
-    # Infrastructure
     task_schemas = create_schemas()
     task_stats = create_stats_table()
 
@@ -331,14 +329,8 @@ def infrastructure_and_dimensions():
     # Audit
     task_audit = audit_dimensions()
 
-    # 2. Define Dependencies
-
-    # Phase 1: Infrastructure
-    # Create schemas first, then the log table
+    # Dependencies
     task_schemas >> task_stats
-
-    # Phase 2: Bronze Ingestion
-    # Once infra is ready, start all Bronze downloads in parallel
     task_stats >> [
         task_geo, 
         task_zoning, 
@@ -348,12 +340,8 @@ def infrastructure_and_dimensions():
         task_rent
     ]
 
-    # Phase 3: Silver Core (Dim Zones)
-    # Dim Zones requires Geo, Zoning, and Mapping from Bronze
     [task_geo, task_zoning, task_mapping] >> task_dim_zones
 
-    # Phase 4: Silver Satellites (Metrics & Context)
-    # These require their specific Bronze source AND the Dim Zones table
     task_dim_zones >> task_metric_pop
     task_pop >> task_metric_pop
 
@@ -363,8 +351,6 @@ def infrastructure_and_dimensions():
     task_dim_zones >> task_dim_holidays
     task_calendars >> task_dim_holidays
 
-    # Phase 5: Final Audit
-    # Run audit only after all Silver tables are ready
     [task_metric_pop, task_metric_rent, task_dim_holidays] >> task_audit
 
 infrastructure_and_dimensions()
