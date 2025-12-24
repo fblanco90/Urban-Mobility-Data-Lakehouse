@@ -4,6 +4,8 @@ data/
 # Python Caches
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Notebook Checkpoints
 .ipynb_checkpoints/
@@ -11,6 +13,8 @@ __pycache__/
 # Local environment
 .venv/
 venv/
+.env
+.env.local
 .conda/
 
 # Temporal files
@@ -26,8 +30,8 @@ airflow/*
 !airflow/dags/**
 !airflow/dags/*/
 !airflow/dags/*/**
+airflow/dags/**/__pycache__/
+!airflow/requirements.txt
 
 airflow/dags/.airflowignore
-
-airflow/dags/print_info.ipynb
 
