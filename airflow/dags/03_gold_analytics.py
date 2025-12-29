@@ -1,16 +1,16 @@
-from airflow.sdk import dag, task, Param
+from airflow.decorators import dag, task
+from airflow.models.param import Param
 from pendulum import datetime
 from utils_db import get_connection
 import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
 import logging
-import matplotlib as plt
 import os
 
 # --- CONFIGURATION ---
-# Default Polygon (South Spain) - Can be overridden in Airflow UI
-DEFAULT_POLYGON = "POLYGON((-7.55 36.0, -7.55 38.8, -1.0 38.8, -1.0 36.0, -7.55 36.0))"
+# Covers Spain entirely including the islands, Ceuta and Melilla
+DEFAULT_POLYGON = "POLYGON((-18.5 27.4, -18.5 44.0, 4.5 44.0, 4.5 27.4, -18.5 27.4))"
 
 @dag(
     dag_id="mobility_03_gold_analytics",
@@ -19,8 +19,8 @@ DEFAULT_POLYGON = "POLYGON((-7.55 36.0, -7.55 38.8, -1.0 38.8, -1.0 36.0, -7.55 
     catchup=False,
     params={
         "start_date": Param("20230101", type="string", description="YYYY-MM-DD"),
-        "end_date": Param("20230101", type="string", description="YYYY-MM-DD"),
-        "polygon_wkt": Param(DEFAULT_POLYGON, type="string",title="Spatial Filter (WKT)", description="Paste your WKT Polygon here.")
+        "end_date": Param("20231231", type="string", description="YYYY-MM-DD"),
+        "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)", description="Paste your WKT Polygon here.")
     },
     tags=['mobility', 'gold', 'analytics']
 )
@@ -30,7 +30,7 @@ def mobility_03_gold_analytics():
     def create_typical_day_cluster(**context):
         """
         Task 1: Clustering Analysis (K-Means)
-        Output: Creates 'lakehouse.gold.typical_day_by_cluster' AND 'lakehouse.gold.dim_cluster_assignments'
+        Optimization: Combined Spatial Setup + Fetch into 1 block. Combined DDLs + Analysis Select into 1 block.
         """
         logging.info("--- 🏗️ Starting Table 1: Clustering Analysis ---")
         params = context['params']
@@ -40,11 +40,13 @@ def mobility_03_gold_analytics():
 
         con = get_connection()
         try:
-            con.execute("INSTALL spatial; LOAD spatial;")
-            
-            # 1. Fetch Data
+            # ---------------------------------------------------------
+            # Fetch Data for Python
+            # ---------------------------------------------------------
             logging.info(f"-> Fetching data ({input_start_date} to {input_end_date})...")
-            query_fetch = f"""
+            
+            # We chain the commands. .df() returns the result of the LAST statement (the SELECT)
+            fetch_script = f"""
                 SELECT 
                     m.partition_date AS date,
                     hour(m.period)   AS hour,
@@ -59,22 +61,26 @@ def mobility_03_gold_analytics():
                 GROUP BY 1, 2
                 ORDER BY 1, 2;
             """
-            df = con.execute(query_fetch).df()
+            df = con.execute(fetch_script).df()
 
             if df.empty:
                 logging.warning("⚠️ No data found. Skipping clustering.")
                 return
 
-            # 2. Pivot & Normalize
+            # ---------------------------------------------------------
+            # PYTHON: In-Memory Processing (Pivot -> K-Means)
+            # ---------------------------------------------------------
+            # Pivot
             df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
             for h in range(24):
                 if h not in df_pivot.columns: df_pivot[h] = 0
             df_pivot = df_pivot.sort_index(axis=1)
             
+            # Normalize
             row_sums = df_pivot.sum(axis=1)
             df_normalized = df_pivot.div(row_sums.replace(0, 1), axis=0).fillna(0)
 
-            # 3. Clustering
+            # Clustering
             n_clusters = 3
             logging.info(f"-> Running K-Means (k={n_clusters})...")
             kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
@@ -85,15 +91,22 @@ def mobility_03_gold_analytics():
                 'cluster_id': clusters
             })
 
-            # 4. Save Results
-            logging.info("-> Materializing Tables...")
+            # Register DataFrame as a View (Does not count as an execute, it's a memory pointer)
             con.register('view_dim_clusters', df_results)
 
-            # A. Save Assignments (Needed for Plotting & Validation Tasks)
-            con.execute("CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS SELECT * FROM view_dim_clusters")
+            # ---------------------------------------------------------
+            # EXECUTION 2: Materialize Tables & Return Analysis
+            # ---------------------------------------------------------
+            logging.info("-> Materializing Tables & Analyzing...")
+            
+            # We combine the creation of both tables AND the final analysis query into one script.
+            # The .df() will return the result of the FINAL Select statement.
+            save_and_analyze_script = f"""
+                -- 1. Save Assignments
+                CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
+                SELECT * FROM view_dim_clusters;
 
-            # B. Create the Profile Table
-            query_typical_cte = f"""
+                -- 2. Save Profiles
                 CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
                 WITH dim_mobility_patterns AS (
                     SELECT date, cluster_id FROM view_dim_clusters
@@ -115,17 +128,18 @@ def mobility_03_gold_analytics():
                   AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_polygon_wkt}'))
                 GROUP BY p.cluster_id, hour(f.period)
                 ORDER BY p.cluster_id, hour(f.period);
+
+                -- 3. Return Analysis (The return value of the function)
+                SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
+                FROM view_dim_clusters GROUP BY cluster_id;
             """
-            con.execute(query_typical_cte)
+            
+            analysis_df = con.execute(save_and_analyze_script).df()
+            logging.info(f"📊 Cluster Analysis:\n{analysis_df.to_string(index=False)}")
+
+            # Cleanup
             con.unregister('view_dim_clusters')
             logging.info("✅ Clustering Complete.")
-
-            # --- 5. INTERPRETATION ---
-            analysis_df = con.execute("""
-                SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
-                FROM view_dim_clusters GROUP BY cluster_id
-            """).df()
-            logging.info(f"📊 Cluster Analysis:\n{analysis_df.to_string(index=False)}")
 
         except Exception as e:
             logging.error(f"❌ Failed in Table 1: {e}")
@@ -138,7 +152,6 @@ def mobility_03_gold_analytics():
     def validate_clusters_vs_calendar():
         """
         Task 2: Validation
-        Checks if the clusters map to logical days (Weekdays vs Weekends).
         """
         logging.info("--- 🕵️‍♂️ VALIDATION: 3 Clusters vs. Real Calendar ---")
         con = get_connection()
@@ -185,101 +198,23 @@ def mobility_03_gold_analytics():
             con.close()
 
     @task
-    def plot_clustering_results():
-        """
-        Task 3: Visualization
-        Generates a .png plot of the typical daily profiles.
-        """
-        logging.info("--- 🎨 Plotting Cluster Results ---")
-        con = get_connection()
-
-        try:
-            # 1. Query Data (Joining the Profile table with Labels from Assignments)
-            query = """
-            WITH cluster_labels AS (
-                SELECT 
-                    cluster_id, 
-                    MODE(dayname(date)) as label
-                FROM lakehouse.gold.dim_cluster_assignments
-                GROUP BY cluster_id
-            )
-            SELECT 
-                t.hour,
-                'Cluster ' || t.cluster_id || ' (' || l.label || ')' as pattern_name,
-                t.avg_trips
-            FROM lakehouse.gold.typical_day_by_cluster t
-            JOIN cluster_labels l ON t.cluster_id = l.cluster_id
-            ORDER BY t.hour;
-            """
-            
-            demand_df = con.execute(query).df()
-
-            if demand_df.empty:
-                logging.error("❌ No data to plot.")
-                return
-
-            # 2. Pivot for Plotting
-            logging.info("Pivoting data...")
-            pivot_df = demand_df.pivot(index='hour', columns='pattern_name', values='avg_trips')
-
-            # 3. Generate Plot
-            logging.info("Generating matplotlib figure...")
-            fig, ax = plt.subplots(figsize=(12, 7))
-            
-            pivot_df.plot(kind='line', ax=ax, marker='o', markersize=4)
-            
-            ax.set_title('Typical Daily Mobility Patterns (Clustered Profiles)', fontsize=16)
-            ax.set_xlabel('Hour of Day', fontsize=12)
-            ax.set_ylabel('Average Trips per Hour', fontsize=12)
-            
-            ax.set_xticks(range(0, 24))
-            ax.set_xticklabels([f'{h:02d}:00' for h in range(24)], rotation=45, ha='right')
-            ax.grid(True, linestyle='--', alpha=0.6)
-            ax.legend(title='Identified Pattern')
-            
-            plt.tight_layout()
-
-            # 4. Save to Disk
-            output_folder = 'results'
-            filename = 'typical_daily_patterns.png'
-            
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
-                logging.info(f"Created directory: {output_folder}")
-                
-            save_path = os.path.join(output_folder, filename)
-            plt.savefig(save_path, dpi=300)
-            
-            logging.info(f"✅ Plot successfully saved to: {save_path}")
-            
-            plt.close(fig)
-
-        finally:
-            con.close()
-
-    @task
     def create_infrastructure_gaps(**context):
         """
-        Gold Table 2: infrastructure_gaps
-        Logic: Gravity model calculation comparing actual trips vs potential (Rent * Pop / Dist^2)
+        Task 3: Infrastructure Gaps (Gravity Model)
         """
         logging.info("--- 🏗️ Starting Table 2: Infrastructure Gaps ---")
-        
-        # 1. Get Parameters
         params = context['params']
         input_start_date = params['start_date']
         input_end_date = params['end_date']
         input_polygon_wkt = params['polygon_wkt']
 
         con = get_connection()
-        
         try:
             logging.info(f"-> Executing Gravity Model ({input_start_date} to {input_end_date})...")
 
-            # We use f-string to inject variables safely
-            gold_bq2_query = f"""
+            # We create one massive SQL script
+            full_script = f"""
                 CREATE OR REPLACE TABLE lakehouse.gold.infrastructure_gaps AS
-
                 WITH od_pairs AS (
                     SELECT
                         origin_zone_id,
@@ -326,7 +261,6 @@ def mobility_03_gold_analytics():
                       AND ST_Intersects(z_org.polygon, ST_GeomFromText('{input_polygon_wkt}'))
                       AND ST_Intersects(z_dest.polygon, ST_GeomFromText('{input_polygon_wkt}'))
                 )
-
                 SELECT
                     org_zone_id,
                     dest_zone_id,
@@ -334,19 +268,16 @@ def mobility_03_gold_analytics():
                     total_population,
                     rent,
                     geographic_distance_km,
-                    
                     -- Gravity Model Calculation
                     (1.0 * (CAST(total_population AS DOUBLE) * CAST(rent AS DOUBLE))) / 
                     (geographic_distance_km * geographic_distance_km) AS estimated_potential_trips,
-                        
                     -- Mismatch Ratio
                     total_trips / NULLIF(estimated_potential_trips, 0) AS mismatch_ratio,
                     CURRENT_TIMESTAMP as processed_at
-
                 FROM model_calculation;
             """
             
-            con.execute(gold_bq2_query)
+            con.execute(full_script)
             logging.info("✅ Table 'lakehouse.gold.infrastructure_gaps' created.")
 
         finally:
@@ -355,8 +286,7 @@ def mobility_03_gold_analytics():
     @task
     def verify_infrastructure_gaps():
         """
-        Task 5: Verification
-        Logs the Top 10 Zones with the highest 'Mismatch'.
+        Task 4: Verification
         """
         logging.info("--- 🔎 Verification: Infrastructure Gaps ---")
         con = get_connection()
@@ -392,14 +322,13 @@ def mobility_03_gold_analytics():
     # Branch 1: Clustering
     t1_clustering = create_typical_day_cluster()
     t3_validate = validate_clusters_vs_calendar()
-    t4_plot = plot_clustering_results()
 
     # Branch 2: Infrastructure
     t2_gaps = create_infrastructure_gaps()
     t5_verify = verify_infrastructure_gaps()
 
     # Dependencies
-    t1_clustering >> [t3_validate, t4_plot]
+    t1_clustering >> t3_validate
     t2_gaps >> t5_verify
 
 mobility_03_gold_analytics()
