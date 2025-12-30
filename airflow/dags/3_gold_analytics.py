@@ -36,90 +36,94 @@ def gold_analytics():
             logging.info(f"-> Fetching data from Silver...")
             
             # We chain the commands. .df() returns the result of the LAST statement (the SELECT)
+            con.execute("""SET s3_uploader_max_parts_per_file = 100;""")
+            con.execute("""SET s3_url_style = 'path';""")
             fetch_script = f"""
                 SELECT 
                     m.partition_date AS date,
                     hour(m.period)   AS hour,
                     SUM(m.trips)     AS total_trips
                 FROM lakehouse.silver.fact_mobility m
-                JOIN lakehouse.silver.dim_zones zo ON m.origin_zone_id = zo.zone_id
-                JOIN lakehouse.silver.dim_zones zd ON m.destination_zone_id = zd.zone_id
                 GROUP BY 1, 2
                 ORDER BY 1, 2;
             """
             df = con.execute(fetch_script).df()
+            
+        finally:
+            con.close()
 
-            if df.empty:
-                logging.warning("⚠️ No data found. Skipping clustering.")
-                return
+        if df.empty:
+            return
 
             # ---------------------------------------------------------
             # PYTHON: In-Memory Processing (Pivot -> K-Means)
             # ---------------------------------------------------------
             # Pivot
-            df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
-            for h in range(24):
-                if h not in df_pivot.columns: df_pivot[h] = 0
-            df_pivot = df_pivot.sort_index(axis=1)
+        df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
+        for h in range(24):
+            if h not in df_pivot.columns: df_pivot[h] = 0
+        df_pivot = df_pivot.sort_index(axis=1)
             
             # Normalize
-            row_sums = df_pivot.sum(axis=1)
-            df_normalized = df_pivot.div(row_sums.replace(0, 1), axis=0).fillna(0)
+        row_sums = df_pivot.sum(axis=1)
+        df_normalized = df_pivot.div(row_sums.replace(0, 1), axis=0).fillna(0)
 
-            # Clustering
-            n_clusters = 3
-            logging.info(f"-> Running K-Means (k={n_clusters})...")
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-            clusters = kmeans.fit_predict(df_normalized)
+        # Clustering
+        n_clusters = 3
+        logging.info(f"-> Running K-Means (k={n_clusters})...")
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        clusters = kmeans.fit_predict(df_normalized)
 
-            df_results = pd.DataFrame({
+        df_results = pd.DataFrame({
                 'date': df_normalized.index,
                 'cluster_id': clusters
-            })
+        })
 
             # Register DataFrame as a View (Does not count as an execute, it's a memory pointer)
-            con.register('view_dim_clusters', df_results)
+        con_gold=get_connection
+        try:
+            con_gold.register('view_dim_clusters', df_results)
 
-            # ---------------------------------------------------------
-            # EXECUTION 2: Materialize Tables & Return Analysis
-            # ---------------------------------------------------------
+                # ---------------------------------------------------------
+                # EXECUTION 2: Materialize Tables & Return Analysis
+                # ---------------------------------------------------------
             logging.info("-> Materializing Tables & Analyzing...")
-            
-            # We combine the creation of both tables AND the final analysis query into one script.
-            # The .df() will return the result of the FINAL Select statement.
+                
+                # We combine the creation of both tables AND the final analysis query into one script.
+                # The .df() will return the result of the FINAL Select statement.
             save_and_analyze_script = f"""
-                -- 1. Save Assignments
-                CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
-                SELECT * FROM view_dim_clusters;
+                    -- 1. Save Assignments
+                    CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
+                    SELECT * FROM view_dim_clusters;
 
-                -- 2. Save Profiles
-                CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
-                WITH dim_mobility_patterns AS (
-                    SELECT date, cluster_id FROM view_dim_clusters
-                )
-                SELECT 
-                    p.cluster_id,
-                    hour(f.period) as hour,
-                    ROUND(AVG(f.trips), 2) as avg_trips,
-                    SUM(f.trips) as total_trips_sample,
-                    CURRENT_TIMESTAMP as processed_at,
-                FROM lakehouse.silver.fact_mobility f
-                JOIN dim_mobility_patterns p ON f.partition_date = p.date
-                JOIN lakehouse.silver.dim_zones zo ON f.origin_zone_id = zo.zone_id
-                JOIN lakehouse.silver.dim_zones zd ON f.destination_zone_id = zd.zone_id
-                GROUP BY p.cluster_id, hour(f.period)
-                ORDER BY p.cluster_id, hour(f.period);
+                    -- 2. Save Profiles
+                    CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
+                    WITH dim_mobility_patterns AS (
+                        SELECT date, cluster_id FROM view_dim_clusters
+                    )
+                    SELECT 
+                        p.cluster_id,
+                        hour(f.period) as hour,
+                        ROUND(AVG(f.trips), 2) as avg_trips,
+                        SUM(f.trips) as total_trips_sample,
+                        CURRENT_TIMESTAMP as processed_at,
+                    FROM lakehouse.silver.fact_mobility f
+                    JOIN dim_mobility_patterns p ON f.partition_date = p.date
+                    JOIN lakehouse.silver.dim_zones zo ON f.origin_zone_id = zo.zone_id
+                    JOIN lakehouse.silver.dim_zones zd ON f.destination_zone_id = zd.zone_id
+                    GROUP BY p.cluster_id, hour(f.period)
+                    ORDER BY p.cluster_id, hour(f.period);
 
-                -- 3. Return Analysis (The return value of the function)
-                SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
-                FROM view_dim_clusters GROUP BY cluster_id;
-            """
-            
-            analysis_df = con.execute(save_and_analyze_script).df()
+                    -- 3. Return Analysis (The return value of the function)
+                    SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
+                    FROM view_dim_clusters GROUP BY cluster_id;
+                """
+                
+            analysis_df = con_gold.execute(save_and_analyze_script).df()
             logging.info(f"📊 Cluster Analysis:\n{analysis_df.to_string(index=False)}")
 
-            # Cleanup
-            con.unregister('view_dim_clusters')
+                # Cleanup
+            con_gold.unregister('view_dim_clusters')
             logging.info("✅ Clustering Complete.")
 
         except Exception as e:
@@ -127,7 +131,7 @@ def gold_analytics():
             raise e
         
         finally:
-            con.close()
+            con_gold.close()
 
     @task
     def validate_clusters_vs_calendar():
@@ -214,9 +218,10 @@ def gold_analytics():
                         m.total_actual_trips AS total_trips,            -- Actual trips
                         
                         -- Calculate distance (Spheroid)
+                        -- We use ST_Distance because geometries are in a projected coordinate system (meters) - computationally more efficient
                         GREATEST(
                             0.5, 
-                            st_distance_spheroid(
+                            ST_Distance(
                                 ST_Centroid(z_org.polygon), 
                                 ST_Centroid(z_dest.polygon)
                             ) / 1000 
