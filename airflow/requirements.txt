@@ -9,3 +9,4 @@ requests
 apache-airflow-providers-amazon
 apache-airflow-providers-postgres
 scikit-learn
+keplergl
