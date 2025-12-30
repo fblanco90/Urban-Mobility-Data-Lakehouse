@@ -6,7 +6,7 @@ import logging
 import requests
 
 @dag(
-    dag_id="infrastructure_and_dimensions",
+    dag_id="1_infrastructure_and_dimensions",
     schedule=None,
     catchup=False,
     # max_active_tasks=2,

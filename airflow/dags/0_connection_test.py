@@ -1,4 +1,4 @@
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 from pendulum import datetime
 from utils_db import get_connection
 import pandas as pd
@@ -27,6 +27,14 @@ SOURCES_CONFIG = [
         'sep': '|',
         'header': True
     },
+    # Example INE Rent (Update URL to the stable export link)
+    {
+        'table_name': 'ine_rent_municipalities',
+        'url': 'https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1',
+        'header': True,
+        'sep': '\t',
+        # 'encoding': 'ISO-8859-1'
+    },
     {
         'table_name': 'work_calendars',
         'url': 'https://datos.madrid.es/egob/catalogo/300082-4-calendario_laboral.csv',
@@ -36,7 +44,7 @@ SOURCES_CONFIG = [
 ]
 
 @dag(
-    dag_id="connection_test",
+    dag_id="0_connection_test",
     start_date=datetime(2023, 1, 1),
     schedule=None, # Triggered manually or by Master DAG
     catchup=False,
