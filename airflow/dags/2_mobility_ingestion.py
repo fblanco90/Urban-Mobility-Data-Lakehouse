@@ -9,7 +9,7 @@ import logging
 BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-municipios/viajes/ficheros-diarios/{year}-{month}/{date}_Viajes_municipios.csv.gz"
 
 @dag(
-    dag_id="mobility_ingestion",
+    dag_id="2_mobility_ingestion",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
