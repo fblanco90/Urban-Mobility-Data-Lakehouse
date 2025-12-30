@@ -1,6 +1,6 @@
 import duckdb
 import os
-from airflow.sdk.bases.hook import BaseHook
+from airflow.hooks.base import BaseHook
 import logging
 
 def get_connection():
@@ -23,7 +23,7 @@ def get_connection():
         neon = BaseHook.get_connection("neon_catalog_conn")
         
         # Get S3 Bucket from Extra, default to a sensible name if missing
-        s3_bucket = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
+        s3_bucket = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject-fer')
         region = aws.extra_dejson.get('region_name', 'eu-central-1')
 
         logging.info(f"⚙️ Configuring Lakehouse. Metadata: {neon.host}, Storage: s3://{s3_bucket}")

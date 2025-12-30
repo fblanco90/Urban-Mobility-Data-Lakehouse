@@ -11,7 +11,6 @@ import json
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
-import seaborn as sns # Optional, but makes the scatter plot nicer. If not available, we fall back to plt.
 
 # --- CONFIGURATION ---
 DEFAULT_POLYGON = "POLYGON((-18.5 27.4, -18.5 44.0, 4.5 44.0, 4.5 27.4, -18.5 27.4))"
