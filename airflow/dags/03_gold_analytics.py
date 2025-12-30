@@ -318,6 +318,178 @@ def mobility_03_gold_analytics():
         finally:
             con.close()
 
+    @task
+    def classify_zone_functions(**context):
+        """
+        Task: Functional Classification of Zones
+        Calculates Net Flow Ratio and Retention Rate to classify zones as:
+        - Bedroom Communities (Sources)
+        - Activity Hubs (Sinks)
+        - Self-Sustaining Cells (High Retention)
+        """
+        logging.info("--- 🏷️ Starting Table 3: Functional Zone Classification ---")
+        params = context['params']
+        input_start_date = params['start_date']
+        input_end_date = params['end_date']
+        input_polygon_wkt = params['polygon_wkt']
+
+        con = get_connection()
+        try:
+            logging.info(f"-> Calculating Flow Asymmetry & Retention ({input_start_date} to {input_end_date})...")
+
+            classification_script = f"""
+                CREATE OR REPLACE TABLE lakehouse.gold.zone_functional_classification AS
+                WITH filtered_mobility AS (
+                    -- 1. Filter Mobility Data Spatially & Temporally
+                    SELECT 
+                        m.origin_zone_id,
+                        m.destination_zone_id,
+                        m.trips
+                    FROM lakehouse.silver.fact_mobility m
+                    JOIN lakehouse.silver.dim_zones zo ON m.origin_zone_id = zo.zone_id
+                    JOIN lakehouse.silver.dim_zones zd ON m.destination_zone_id = zd.zone_id
+                    WHERE m.partition_date BETWEEN '{input_start_date}' AND '{input_end_date}'
+                      AND ST_Intersects(zo.polygon, ST_GeomFromText('{input_polygon_wkt}'))
+                      AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_polygon_wkt}'))
+                ),
+                zone_stats AS (
+                    -- 2. Aggregate Flows per Zone
+                    SELECT 
+                        z.zone_id,
+                        z.zone_name,
+                        -- Internal: Origin = Dest
+                        COALESCE(SUM(CASE WHEN m.origin_zone_id = m.destination_zone_id THEN m.trips ELSE 0 END), 0) AS internal_trips,
+                        -- Inflow: Dest = Zone, Origin != Zone
+                        COALESCE(SUM(CASE WHEN m.destination_zone_id = z.zone_id AND m.origin_zone_id != z.zone_id THEN m.trips ELSE 0 END), 0) AS inflow,
+                        -- Outflow: Origin = Zone, Dest != Zone
+                        COALESCE(SUM(CASE WHEN m.origin_zone_id = z.zone_id AND m.destination_zone_id != z.zone_id THEN m.trips ELSE 0 END), 0) AS outflow
+                    FROM lakehouse.silver.dim_zones z
+                    LEFT JOIN filtered_mobility m ON z.zone_id = m.origin_zone_id OR z.zone_id = m.destination_zone_id
+                    WHERE ST_Intersects(z.polygon, ST_GeomFromText('{input_polygon_wkt}'))
+                    GROUP BY z.zone_id, z.zone_name
+                ),
+                metrics_calc AS (
+                    -- 3. Compute Ratios
+                    SELECT 
+                        *,
+                        -- Total Generated = Outbound + Internal
+                        (outflow + internal_trips) AS total_generated_trips,
+                        
+                        -- Net Flow Ratio: (In - Out) / (In + Out)
+                        -- Range: -1 (Pure Exporter) to +1 (Pure Importer)
+                        CASE 
+                            WHEN (inflow + outflow) = 0 THEN 0 
+                            ELSE (inflow - outflow) / (inflow + outflow) 
+                        END AS net_flow_ratio,
+
+                        -- Retention Rate: Internal / Total Generated
+                        CASE 
+                            WHEN (outflow + internal_trips) = 0 THEN 0
+                            ELSE internal_trips / (outflow + internal_trips)
+                        END AS retention_rate
+                    FROM zone_stats
+                )
+                SELECT 
+                    zone_id,
+                    zone_name,
+                    internal_trips,
+                    inflow,
+                    outflow,
+                    ROUND(net_flow_ratio, 3) as net_flow_ratio,
+                    ROUND(retention_rate, 3) as retention_rate,
+                    
+                    -- 4. Apply Classification Logic (Thresholds)
+                    CASE 
+                        -- Priority 1: High Internal Retention (Self-Sustaining)
+                        WHEN retention_rate > 0.6 THEN 'Self-Sustaining Cell'
+                        
+                        -- Priority 2: Flow Dominance
+                        WHEN net_flow_ratio > 0.15 THEN 'Activity Hub (Importer)'
+                        WHEN net_flow_ratio < -0.15 THEN 'Bedroom Community (Exporter)'
+                        
+                        ELSE 'Balanced / Transit Zone'
+                    END AS functional_label,
+                    
+                    CURRENT_TIMESTAMP as processed_at
+                FROM metrics_calc
+                WHERE (internal_trips + inflow + outflow) > 0; -- Exclude empty zones
+
+                -- 5. Quick Verification
+                SELECT functional_label, COUNT(*) as zone_count 
+                FROM lakehouse.gold.zone_functional_classification 
+                GROUP BY functional_label 
+                ORDER BY zone_count DESC;
+            """
+
+            # Run everything in one go
+            verification_df = con.execute(classification_script).df()
+            
+            logging.info(f"✅ Classification Table Created.\nSummary:\n{verification_df.to_string(index=False)}")
+
+        except Exception as e:
+            logging.error(f"❌ Failed in Classification Task: {e}")
+            raise e
+        finally:
+            con.close()
+
+
+    @task
+    def verify_zone_classification():
+        """
+        Verification: Functional Classification
+        Logs a summary of zone types and lists the top 5 examples of each category 
+        sorted by the intensity of their respective metric.
+        """
+        logging.info("--- 🔎 Verification: Functional Zone Classification ---")
+        con = get_connection()
+        pd.set_option('display.max_colwidth', None)
+        
+        try:
+            # We use a window function (ROW_NUMBER) to pick the top 3 examples for each category
+            # based on the intensity of their defining metric.
+            query_verify = """
+                WITH ranked_examples AS (
+                    SELECT 
+                        functional_label,
+                        zone_name,
+                        net_flow_ratio,
+                        retention_rate,
+                        -- Rank by intensity:
+                        -- Hubs: High Net Flow
+                        -- Bedroom: Low Net Flow (High Negative)
+                        -- Self-Sustaining: High Retention
+                        ROW_NUMBER() OVER (
+                            PARTITION BY functional_label 
+                            ORDER BY 
+                                CASE 
+                                    WHEN functional_label LIKE '%Hub%' THEN net_flow_ratio DESC
+                                    WHEN functional_label LIKE '%Bedroom%' THEN net_flow_ratio ASC
+                                    WHEN functional_label LIKE '%Self-Sustaining%' THEN retention_rate DESC
+                                    ELSE total_generated_trips DESC -- For 'Balanced', show busiest
+                                END
+                        ) as rank
+                    FROM lakehouse.gold.zone_functional_classification
+                )
+                SELECT 
+                    functional_label,
+                    COUNT(*) as total_zones,
+                    LIST(zone_name ORDER BY rank) FILTER (WHERE rank <= 3) as top_3_examples
+                FROM ranked_examples
+                GROUP BY functional_label
+                ORDER BY total_zones DESC;
+            """
+            
+            logging.info("Summarizing Functional Roles...")
+            df_verify = con.execute(query_verify).df()
+            
+            if df_verify.empty:
+                logging.warning("⚠️ Verification returned no rows.")
+            else:
+                logging.info(f"\n{df_verify.to_string(index=False)}")
+                
+        finally:
+            con.close()
+
     # --- DAG FLOW ---
     # Branch 1: Clustering
     t1_clustering = create_typical_day_cluster()
@@ -327,8 +499,13 @@ def mobility_03_gold_analytics():
     t2_gaps = create_infrastructure_gaps()
     t5_verify = verify_infrastructure_gaps()
 
+    # Branch 3: Classification
+    t_classify = classify_zone_functions()
+    t_verify_class = verify_zone_classification()
+
     # Dependencies
     t1_clustering >> t3_validate
     t2_gaps >> t5_verify
+    t_classify >> t_verify_class
 
 mobility_03_gold_analytics()
