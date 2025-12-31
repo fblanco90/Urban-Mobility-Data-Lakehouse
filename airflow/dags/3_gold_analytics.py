@@ -1,181 +1,249 @@
 from airflow.decorators import dag, task
+from airflow.models.param import Param
 from pendulum import datetime
 from utils_db import get_connection
 import pandas as pd
 import numpy as np
-from sklearn.cluster import MiniBatchKMeans
+from sklearn.cluster import KMeans
 import logging
+import os
+from datetime import date, timedelta
+
 
 @dag(
     dag_id="3_gold_analytics",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
-    tags=['mobility', 'gold', 'performance']
+    tags=['mobility', 'gold', 'analytics']
 )
 def gold_analytics():
 
-    @task
-    def create_typical_day_cluster(**context):
-        logging.info("--- 🚀 Optimized Clustering with Progress Tracking ---")
+    # @task
+    # def create_typical_day_cluster(**context):
+    #     """
+    #     Task 1: Clustering Analysis (K-Means)
+    #     Optimization: Combined Spatial Setup + Fetch into 1 block. Combined DDLs + Analysis Select into 1 block.
+    #     """
+    #     logging.info("--- 🏗️ Starting Table 1: Clustering Analysis ---")
+
+    #     con = get_connection()
+    #     try:
+    #         # ---------------------------------------------------------
+    #         # Fetch Data for Python
+    #         # ---------------------------------------------------------
+    #         logging.info(f"-> Fetching data from Silver...")
+            
+    #         # We chain the commands. .df() returns the result of the LAST statement (the SELECT)
+    #         con.execute("""SET s3_uploader_max_parts_per_file = 100;""")
+    #         con.execute("""SET s3_url_style = 'path';""")
+    #         fetch_script = f"""
+    #             SELECT 
+    #                 m.partition_date AS date,
+    #                 hour(m.period)   AS hour,
+    #                 SUM(m.trips)     AS total_trips
+    #             FROM lakehouse.silver.fact_mobility m
+    #             GROUP BY 1, 2
+    #             ORDER BY 1, 2;
+    #         """
+    #         df = con.execute(fetch_script).df()
+            
+    #     finally:
+    #         con.close()
+
+    #     if df.empty:
+    #         return
+
+    #         # ---------------------------------------------------------
+    #         # PYTHON: In-Memory Processing (Pivot -> K-Means)
+    #         # ---------------------------------------------------------
+    #         # Pivot
+    #     df_pivot = df.pivot(index='date', columns='hour', values='total_trips').fillna(0)
+    #     for h in range(24):
+    #         if h not in df_pivot.columns: df_pivot[h] = 0
+    #     df_pivot = df_pivot.sort_index(axis=1)
+            
+    #         # Normalize
+    #     row_sums = df_pivot.sum(axis=1)
+    #     df_normalized = df_pivot.div(row_sums.replace(0, 1), axis=0).fillna(0)
+
+    #     # Clustering
+    #     n_clusters = 3
+    #     logging.info(f"-> Running K-Means (k={n_clusters})...")
+    #     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    #     clusters = kmeans.fit_predict(df_normalized)
+
+    #     df_results = pd.DataFrame({
+    #             'date': df_normalized.index,
+    #             'cluster_id': clusters
+    #     })
+
+    #         # Register DataFrame as a View (Does not count as an execute, it's a memory pointer)
+    #     con_gold=get_connection
+    #     try:
+    #         con_gold.register('view_dim_clusters', df_results)
+
+    #             # ---------------------------------------------------------
+    #             # EXECUTION 2: Materialize Tables & Return Analysis
+    #             # ---------------------------------------------------------
+    #         logging.info("-> Materializing Tables & Analyzing...")
+                
+    #             # We combine the creation of both tables AND the final analysis query into one script.
+    #             # The .df() will return the result of the FINAL Select statement.
+    #         save_and_analyze_script = f"""
+    #                 -- 1. Save Assignments
+    #                 CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
+    #                 SELECT * FROM view_dim_clusters;
+
+    #                 -- 2. Save Profiles
+    #                 CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
+    #                 WITH dim_mobility_patterns AS (
+    #                     SELECT date, cluster_id FROM view_dim_clusters
+    #                 )
+    #                 SELECT 
+    #                     p.cluster_id,
+    #                     hour(f.period) as hour,
+    #                     ROUND(AVG(f.trips), 2) as avg_trips,
+    #                     SUM(f.trips) as total_trips_sample,
+    #                     CURRENT_TIMESTAMP as processed_at,
+    #                 FROM lakehouse.silver.fact_mobility f
+    #                 JOIN dim_mobility_patterns p ON f.partition_date = p.date
+    #                 JOIN lakehouse.silver.dim_zones zo ON f.origin_zone_id = zo.zone_id
+    #                 JOIN lakehouse.silver.dim_zones zd ON f.destination_zone_id = zd.zone_id
+    #                 GROUP BY p.cluster_id, hour(f.period)
+    #                 ORDER BY p.cluster_id, hour(f.period);
+
+    #                 -- 3. Return Analysis (The return value of the function)
+    #                 SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
+    #                 FROM view_dim_clusters GROUP BY cluster_id;
+    #             """
+                
+    #         analysis_df = con_gold.execute(save_and_analyze_script).df()
+    #         logging.info(f"📊 Cluster Analysis:\n{analysis_df.to_string(index=False)}")
+
+    #             # Cleanup
+    #         con_gold.unregister('view_dim_clusters')
+    #         logging.info("✅ Clustering Complete.")
+
+    #     except Exception as e:
+    #         logging.error(f"❌ Failed in Table 1: {e}")
+    #         raise e
+        
+    #     finally:
+    #         con_gold.close()
+
+    @task(execution_timeout=None)
+    def create_infrastructure_gaps(**context):
+        """
+        Infrastructure Gaps (Gravity Model) – daily chunked using partition_date
+        """
+        logging.info("--- 🏗️ Starting Table 2: Infrastructure Gaps (daily) ---")
+
+        # Date range for processing – can come from DAG params or config
+        start_date = date(2023, 1, 1)
+        end_date   = date(2023, 12, 31)
+
+        all_dates = []
+        current = start_date
+        while current <= end_date:
+            all_dates.append(current)
+            current += timedelta(days=1)
 
         with get_connection() as con:
-            con.execute("SET memory_limit = '2GB';")
-            con.execute("SET http_keep_alive = true;")
-
-            # STEP 1: Materialize the Pivot to a TEMP TABLE (The "Heavy Lifting")
-            # Doing this as a Table instead of a View means DuckDB only scans S3 ONCE.
-            logging.info("-> Materializing 24h Matrix to Temp Table (Scanning S3)...")
-            con.execute("""
-                CREATE OR REPLACE TEMP TABLE temp_normalized_matrix AS
-                WITH raw_data AS (
-                    SELECT partition_date, hour(period) as hr, SUM(trips) as t
-                    FROM lakehouse.silver.fact_mobility
-                    GROUP BY 1, 2
-                ),
-                pivoted AS (
-                    PIVOT raw_data 
-                    ON hr IN (0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23)
-                    USING SUM(t) 
-                    GROUP BY partition_date
-                )
-                SELECT 
-                    partition_date,
-                    (COALESCE("0",0)+COALESCE("1",0)+COALESCE("2",0)+COALESCE("3",0)+COALESCE("4",0)+COALESCE("5",0)+
-                     COALESCE("6",0)+COALESCE("7",0)+COALESCE("8",0)+COALESCE("9",0)+COALESCE("10",0)+COALESCE("11",0)+
-                     COALESCE("12",0)+COALESCE("13",0)+COALESCE("14",0)+COALESCE("15",0)+COALESCE("16",0)+COALESCE("17",0)+
-                     COALESCE("18",0)+COALESCE("19",0)+COALESCE("20",0)+COALESCE("21",0)+COALESCE("22",0)+COALESCE("23",0)) as day_total,
-                    * EXCLUDE(partition_date)
-                FROM pivoted;
-            """)
-            logging.info("✅ Matrix materialized successfully.")
-
-            # STEP 2: Batch Fit with Progress Logging
-            logging.info("-> Starting Batch Fit (MiniBatchKMeans)...")
-            kmeans = MiniBatchKMeans(n_clusters=3, random_state=42, batch_size=500)
-            
-            cursor = con.execute("SELECT * EXCLUDE(partition_date, day_total) FROM temp_normalized_matrix")
-            reader = cursor.fetch_record_batch(rows_per_batch=500)
-
-            batch_count = 0
-            while True:
-                try:
-                    batch = reader.read_next_batch()
-                    X = batch.to_pandas().fillna(0)
-                    row_sums = X.sum(axis=1).replace(0, 1)
-                    kmeans.partial_fit(X.div(row_sums, axis=0))
-                    
-                    batch_count += 1
-                    if batch_count % 5 == 0: # Log every 5 batches
-                        logging.info(f"   ... Processed {batch_count} training batches")
-                except StopIteration:
-                    break
-
-            # STEP 3: Batch Predict (Avoid loading full matrix into memory)
-            logging.info("-> Starting Batch Prediction...")
-            cursor = con.execute("SELECT partition_date, * EXCLUDE(partition_date, day_total) FROM temp_normalized_matrix")
-            reader = cursor.fetch_record_batch(rows_per_batch=1000)
-
-            all_dates = []
-            all_clusters = []
-            
-            batch_count = 0
-            while True:
-                try:
-                    batch = reader.read_next_batch()
-                    df_batch = batch.to_pandas().fillna(0)
-                    
-                    # Store dates and predict cluster for this batch
-                    all_dates.extend(df_batch['partition_date'].tolist())
-                    
-                    X = df_batch.drop(columns=['partition_date'])
-                    row_sums = X.sum(axis=1).replace(0, 1)
-                    all_clusters.extend(kmeans.predict(X.div(row_sums, axis=0)).tolist())
-                    
-                    batch_count += 1
-                    logging.info(f"   ... Predicted batch {batch_count}")
-                except StopIteration:
-                    break
-
-            # STEP 4: Save Results
-            df_results = pd.DataFrame({'date': all_dates, 'cluster_id': all_clusters})
-            con.register('temp_results', df_results)
-            con.execute("CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS SELECT * FROM temp_results")
-            
-            logging.info("✅ Assignments saved. Calculating profiles...")
-
-            # STEP 5: Fast Profile Calculation (Join Assignment with Temp Table instead of S3)
-            con.execute("""
-                CREATE OR REPLACE TABLE lakehouse.gold.typical_day_by_cluster AS
-                SELECT 
-                    a.cluster_id,
-                    h.hr as hour,
-                    AVG(h.t) as avg_trips,
-                    CURRENT_TIMESTAMP as processed_at
-                FROM (
-                    -- This CTE is just the unpivoted version of our temp table
-                    SELECT partition_date, 0 as hr, "0" as t FROM temp_normalized_matrix UNION ALL
-                    SELECT partition_date, 1 as hr, "1" as t FROM temp_normalized_matrix -- ... repeat or join original
-                    -- Actually, simpler to just re-aggregate the hourly_agg CTE locally:
-                ) h
-                JOIN lakehouse.gold.dim_cluster_assignments a ON h.partition_date = a.date
-                GROUP BY 1, 2;
-            """)
-            # Note: For the profile join above, it's actually best to just use the SQL CTE 
-            # from the previous version but make sure it hits the local temp table or local cache.
-
-    @task
-    def create_infrastructure_gaps():
-        logging.info("--- 🚀 High-Performance Gravity Model ---")
-
-        with get_connection() as con:
+            # DuckLake / Neon settings
+            con.execute("SET http_keep_alive=true;")
             con.execute("SET threads = 4;")
-            con.execute("SET memory_limit = '2GB';")
 
+            # Step 0 – temporary table for daily aggregation
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.tmp_actuals_daily (
+                    o BIGINT,
+                    d BIGINT,
+                    partition_date DATE,
+                    t BIGINT
+                );
+            """)
+
+            logging.info(f"📊 Step 1/4: Aggregating actual trips by day ({len(all_dates)} days)...")
+
+            for single_date in all_dates:
+                logging.info(f"Processing {single_date} ...")
+                con.execute(f"""
+                    INSERT INTO lakehouse.silver.tmp_actuals_daily
+                    SELECT
+                        origin_zone_id AS o,
+                        destination_zone_id AS d,
+                        partition_date,
+                        SUM(trips) AS t
+                    FROM lakehouse.silver.fact_mobility
+                    WHERE partition_date = DATE '{single_date}'
+                    GROUP BY 1,2,3;
+                """)
+
+            logging.info("📊 Step 2/4: Load metrics and rents ...")
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.metrics_daily AS
+                SELECT zone_id AS id, population AS pop
+                FROM lakehouse.silver.metric_population;
+            """)
+
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.rents_daily AS
+                SELECT zone_id AS id, income_per_capita AS r
+                FROM lakehouse.silver.metric_ine_rent
+                WHERE year = 2023;
+            """)
+
+            logging.info("📊 Step 3/4: Compute potential trips ...")
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.potential_daily AS
+                SELECT
+                    act.o AS org_zone_id,
+                    act.d AS dest_zone_id,
+                    act.partition_date,
+                    act.t AS total_trips,
+                    m1.pop AS total_population,
+                    m2.r AS rent,
+                    dist.dist_km,
+                    (1.0 * (m1.pop * m2.r)) / (dist.dist_km * dist.dist_km) AS potential
+                FROM lakehouse.silver.tmp_actuals_daily act
+                JOIN lakehouse.silver.metrics_daily m1 ON act.o = m1.id
+                JOIN lakehouse.silver.rents_daily   m2 ON act.d = m2.id
+                JOIN lakehouse.silver.dim_zone_distances dist
+                ON act.o = dist.origin_zone_id
+                AND act.d = dist.destination_zone_id;
+            """)
+
+            logging.info("📊 Step 4/4: Compute mismatch ratio and save final table ...")
             con.execute("""
                 CREATE OR REPLACE TABLE lakehouse.gold.infrastructure_gaps AS
-                WITH actuals AS (
-                    SELECT origin_zone_id as o, destination_zone_id as d, SUM(trips) as t
-                    FROM lakehouse.silver.fact_mobility
-                    GROUP BY 1, 2
-                ),
-                metrics AS (
-                    SELECT zone_id as id, population as pop FROM lakehouse.silver.metric_population
-                ),
-                rents AS (
-                    SELECT zone_id as id, income_per_capita as r FROM lakehouse.silver.metric_ine_rent WHERE year = 2023
-                )
                 SELECT
-                    act.o as org_zone_id,
-                    act.d as dest_zone_id,
-                    act.t as total_trips,
-                    m1.pop as total_population,
-                    m2.r as rent,
-                    dist.dist_km,
-                    (1.0 * (m1.pop * m2.r)) / (dist.dist_km * dist.dist_km) AS potential,
-                    act.t / NULLIF(potential, 0) AS mismatch_ratio
-                FROM actuals act
-                JOIN metrics m1 ON act.o = m1.id
-                JOIN rents m2   ON act.d = m2.id
-                JOIN lakehouse.silver.dim_zone_distances dist ON act.o = dist.origin_zone_id AND act.d = dist.destination_zone_id;
+                    org_zone_id,
+                    dest_zone_id,
+                    partition_date,
+                    total_trips,
+                    total_population,
+                    rent,
+                    dist_km,
+                    potential,
+                    total_trips / NULLIF(potential, 0) AS mismatch_ratio
+                FROM lakehouse.silver.potential_daily;
             """)
-            logging.info("✅ Infrastructure Gaps Complete.")
 
-    @task
-    def validate_and_verify():
-        with get_connection() as con:
-            # We only use ORDER BY at the very end for the logs
-            logging.info("Cluster Distribution:")
-            print(con.execute("SELECT cluster_id, COUNT(*) FROM lakehouse.gold.dim_cluster_assignments GROUP BY 1 ORDER BY 1").df())
-            
-            logging.info("Top Mismatch Gaps:")
-            print(con.execute("SELECT * FROM lakehouse.gold.infrastructure_gaps WHERE total_trips > 50 ORDER BY mismatch_ratio LIMIT 5").df())
+        logging.info("✅ Table 'lakehouse.gold.infrastructure_gaps' created.")
 
-    # Workflow
-    t1 = create_typical_day_cluster()
-    t2 = create_infrastructure_gaps()
-    t3 = validate_and_verify()
 
-    t1 >> t2 >> t3
+
+
+    # --- DAG FLOW ---
+    # Branch 1: Clustering
+    # t1_clustering = create_typical_day_cluster()
+
+    # Branch 2: Infrastructure
+    t2_gaps = create_infrastructure_gaps()
+
+    # Dependencies
+    t2_gaps
+    # t1_clustering >> t2_gaps
 
 gold_analytics()
