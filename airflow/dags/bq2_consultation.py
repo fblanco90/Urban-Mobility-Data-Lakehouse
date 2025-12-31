@@ -17,8 +17,8 @@ DEFAULT_POLYGON = "POLYGON((-18.5 27.4, -18.5 44.0, 4.5 44.0, 4.5 27.4, -18.5 27
     catchup=False,
     params={
         # Date params kept for consistency, though this DAG queries the pre-built Gold table
-        "start_date": Param("20230101", type="string", description="YYYY-MM-DD"),
-        "end_date": Param("20231231", type="string", description="YYYY-MM-DD"),
+        "start_date": Param("2023-01-01", type="string", description="YYYY-MM-DD"),
+        "end_date": Param("2023-12-31", type="string", description="YYYY-MM-DD"),
         "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)", description="Paste your WKT Polygon here.")
     },
     tags=['mobility', 'gold', 'visualization', 'kepler']
@@ -60,8 +60,8 @@ def mobility_05_gaps_visualization():
                 JOIN lakehouse.silver.dim_zones zo ON g.origin_zone_id = zo.zone_id
                 JOIN lakehouse.silver.dim_zones zd ON g.destination_zone_id = zd.zone_id
                 WHERE 
-                    ST_Intersects(zo.polygon, ST_GeomFromText('{input_wkt}'))
-                    AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_wkt}'))
+                    ST_Contains(zo.polygon, ST_GeomFromText('{input_wkt}'))
+                    AND ST_Contains(zd.polygon, ST_GeomFromText('{input_wkt}'))
                     AND g.total_trips > 10  -- Filter noise
                 ORDER BY g.mismatch_ratio ASC
                 LIMIT 10;

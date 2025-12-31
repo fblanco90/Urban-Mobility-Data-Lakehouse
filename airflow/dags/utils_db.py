@@ -1,6 +1,6 @@
 import duckdb
 import os
-from airflow.hooks.base import BaseHook
+from airflow.sdk.bases.hook import BaseHook
 import logging
 
 def get_connection():

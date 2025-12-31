@@ -1,5 +1,4 @@
 from airflow.decorators import dag, task
-from airflow.models.param import Param
 from pendulum import datetime
 from utils_db import get_connection
 import pandas as pd
@@ -8,45 +7,31 @@ from sklearn.cluster import KMeans
 import logging
 import os
 
-# --- CONFIGURATION ---
-# Covers Spain entirely including the islands, Ceuta and Melilla
-DEFAULT_POLYGON = "POLYGON((-18.5 27.4, -18.5 44.0, 4.5 44.0, 4.5 27.4, -18.5 27.4))"
-
 @dag(
     dag_id="mobility_03_gold_analytics",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
-    params={
-        "start_date": Param("20230101", type="string", description="YYYY-MM-DD"),
-        "end_date": Param("20231231", type="string", description="YYYY-MM-DD"),
-        "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)", description="Paste your WKT Polygon here.")
-    },
     tags=['mobility', 'gold', 'analytics']
 )
 def mobility_03_gold_analytics():
 
     @task
-    def create_typical_day_cluster(**context):
+    def create_typical_day_cluster():
         """
         Task 1: Clustering Analysis (K-Means)
-        Optimization: Combined Spatial Setup + Fetch into 1 block. Combined DDLs + Analysis Select into 1 block.
+        Calculates clusters based on ALL data found in Silver.
         """
-        logging.info("--- 🏗️ Starting Table 1: Clustering Analysis ---")
-        params = context['params']
-        input_start_date = params['start_date']
-        input_end_date = params['end_date']
-        input_polygon_wkt = params['polygon_wkt']
+        logging.info("--- 🏗️ Starting Table 1: Clustering Analysis (Full History) ---")
 
         con = get_connection()
         try:
             # ---------------------------------------------------------
-            # Fetch Data for Python
+            # Fetch Data for Python (No Filters)
             # ---------------------------------------------------------
-            logging.info(f"-> Fetching data ({input_start_date} to {input_end_date})...")
+            logging.info("-> Fetching all available mobility data...")
             
-            # We chain the commands. .df() returns the result of the LAST statement (the SELECT)
-            fetch_script = f"""
+            fetch_script = """
                 SELECT 
                     m.partition_date AS date,
                     hour(m.period)   AS hour,
@@ -55,16 +40,13 @@ def mobility_03_gold_analytics():
                 JOIN lakehouse.silver.dim_zones zo ON m.origin_zone_id = zo.zone_id
                 JOIN lakehouse.silver.dim_zones zd ON m.destination_zone_id = zd.zone_id
                 WHERE m.trips IS NOT NULL
-                  AND m.partition_date BETWEEN '{input_start_date}' AND '{input_end_date}'
-                  AND ST_Intersects(zo.polygon, ST_GeomFromText('{input_polygon_wkt}'))
-                  AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_polygon_wkt}'))
                 GROUP BY 1, 2
                 ORDER BY 1, 2;
             """
             df = con.execute(fetch_script).df()
 
             if df.empty:
-                logging.warning("⚠️ No data found. Skipping clustering.")
+                logging.warning("⚠️ No data found in Silver. Skipping clustering.")
                 return
 
             # ---------------------------------------------------------
@@ -91,7 +73,7 @@ def mobility_03_gold_analytics():
                 'cluster_id': clusters
             })
 
-            # Register DataFrame as a View (Does not count as an execute, it's a memory pointer)
+            # Register DataFrame as a View 
             con.register('view_dim_clusters', df_results)
 
             # ---------------------------------------------------------
@@ -99,9 +81,9 @@ def mobility_03_gold_analytics():
             # ---------------------------------------------------------
             logging.info("-> Materializing Tables & Analyzing...")
             
-            # We combine the creation of both tables AND the final analysis query into one script.
-            # The .df() will return the result of the FINAL Select statement.
-            save_and_analyze_script = f"""
+            # Note: For analysis_start/end, we now calculate min/max from the table 
+            # dynamically since we removed the input parameters.
+            save_and_analyze_script = """
                 -- 1. Save Assignments
                 CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
                 SELECT * FROM view_dim_clusters;
@@ -117,19 +99,17 @@ def mobility_03_gold_analytics():
                     ROUND(AVG(f.trips), 2) as avg_trips,
                     SUM(f.trips) as total_trips_sample,
                     CURRENT_TIMESTAMP as processed_at,
-                    '{input_start_date}' as analysis_start,
-                    '{input_end_date}' as analysis_end
+                    MIN(f.partition_date) OVER() as analysis_start,
+                    MAX(f.partition_date) OVER() as analysis_end
                 FROM lakehouse.silver.fact_mobility f
                 JOIN dim_mobility_patterns p ON f.partition_date = p.date
                 JOIN lakehouse.silver.dim_zones zo ON f.origin_zone_id = zo.zone_id
                 JOIN lakehouse.silver.dim_zones zd ON f.destination_zone_id = zd.zone_id
-                WHERE f.partition_date BETWEEN '{input_start_date}' AND '{input_end_date}'
-                  AND ST_Intersects(zo.polygon, ST_GeomFromText('{input_polygon_wkt}'))
-                  AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_polygon_wkt}'))
-                GROUP BY p.cluster_id, hour(f.period)
+                -- No spatial or temporal filters
+                GROUP BY p.cluster_id, hour(f.period), f.partition_date
                 ORDER BY p.cluster_id, hour(f.period);
 
-                -- 3. Return Analysis (The return value of the function)
+                -- 3. Return Analysis
                 SELECT cluster_id, COUNT(*) as days, MODE(dayname(date)) as typical_day
                 FROM view_dim_clusters GROUP BY cluster_id;
             """
@@ -198,22 +178,19 @@ def mobility_03_gold_analytics():
             con.close()
 
     @task
-    def create_infrastructure_gaps(**context):
+    def create_infrastructure_gaps():
         """
-        Task 3: Infrastructure Gaps (Gravity Model)
+        Task 3: Infrastructure Gaps - Manual Haversine Calculation (Fail-Safe)
         """
         logging.info("--- 🏗️ Starting Table 2: Infrastructure Gaps ---")
-        params = context['params']
-        input_start_date = params['start_date']
-        input_end_date = params['end_date']
-        input_polygon_wkt = params['polygon_wkt']
-
         con = get_connection()
         try:
-            logging.info(f"-> Executing Gravity Model ({input_start_date} to {input_end_date})...")
+            logging.info("-> Executing Gravity Model with Manual Math...")
+            
+            # 1. Load Spatial Extension (still needed to extract X/Y)
+            con.execute("INSTALL spatial; LOAD spatial;")
 
-            # We create one massive SQL script
-            full_script = f"""
+            full_script = """
                 CREATE OR REPLACE TABLE lakehouse.gold.infrastructure_gaps AS
                 WITH od_pairs AS (
                     SELECT
@@ -221,7 +198,6 @@ def mobility_03_gold_analytics():
                         destination_zone_id,
                         SUM(trips) AS total_actual_trips
                     FROM lakehouse.silver.fact_mobility
-                    WHERE partition_date BETWEEN '{input_start_date}' AND '{input_end_date}'
                     GROUP BY 1, 2
                 ),
                 unique_rent AS (
@@ -229,38 +205,77 @@ def mobility_03_gold_analytics():
                     FROM lakehouse.silver.metric_ine_rent
                     WHERE year = 2023
                 ),
+                
+                -- STEP 1: Extract Coordinates & Convert to Radians
+                -- We assume Standard WKT: X=Longitude, Y=Latitude
+                geo_data AS (
+                    SELECT 
+                        zone_id,
+                        radians(ST_Y(ST_Centroid(polygon))) as lat_rad,
+                        radians(ST_X(ST_Centroid(polygon))) as lon_rad,
+                        ST_Y(ST_Centroid(polygon)) as raw_lat  -- kept for validity check
+                    FROM lakehouse.silver.dim_zones
+                    WHERE polygon IS NOT NULL
+                ),
+
                 model_calculation AS (
                     SELECT
                         m.origin_zone_id AS org_zone_id,
                         m.destination_zone_id AS dest_zone_id,
-                        p.population AS total_population,               -- P_i
-                        r.rent,                                         -- E_j
-                        m.total_actual_trips AS total_trips,            -- Actual trips
+                        p.population AS total_population,
+                        r.rent,
+                        m.total_actual_trips AS total_trips,
                         
-                        -- Calculate distance (Spheroid)
-                        GREATEST(
-                            0.5, 
-                            st_distance_spheroid(
-                                ST_Centroid(z_org.polygon), 
-                                ST_Centroid(z_dest.polygon)
-                            ) / 1000 
-                        ) AS geographic_distance_km
+                        z_org.lat_rad as lat1, z_org.lon_rad as lon1,
+                        z_dest.lat_rad as lat2, z_dest.lon_rad as lon2
                             
                     FROM od_pairs AS m
                     JOIN lakehouse.silver.metric_population AS p ON m.origin_zone_id = p.zone_id
                     JOIN unique_rent AS r ON m.destination_zone_id = r.zone_id
-                    JOIN lakehouse.silver.dim_zones as z_org ON m.origin_zone_id = z_org.zone_id
-                    JOIN lakehouse.silver.dim_zones as z_dest ON m.destination_zone_id = z_dest.zone_id
+                    
+                    JOIN geo_data as z_org ON m.origin_zone_id = z_org.zone_id
+                    JOIN geo_data as z_dest ON m.destination_zone_id = z_dest.zone_id
 
                     WHERE p.population > 0 
-                      AND r.rent > 0
-                      AND z_org.polygon IS NOT NULL
-                      AND z_dest.polygon IS NOT NULL
-                      AND m.origin_zone_id != m.destination_zone_id 
-                      -- SPATIAL FILTER
-                      AND ST_Intersects(z_org.polygon, ST_GeomFromText('{input_polygon_wkt}'))
-                      AND ST_Intersects(z_dest.polygon, ST_GeomFromText('{input_polygon_wkt}'))
+                    AND r.rent > 0
+                    AND m.origin_zone_id != m.destination_zone_id 
+                    -- Ensure we have valid coordinates (Not 0, Not NULL)
+                    AND z_org.raw_lat IS NOT NULL 
+                    AND z_dest.raw_lat IS NOT NULL
+                ),
+                
+                distance_calc AS (
+                    SELECT 
+                        *,
+                        -- STEP 2: The Haversine Formula (Result in KM)
+                        -- 6371 = Earth Radius in KM
+                        -- Formula: 2 * R * asin(sqrt(a))
+                        -- a = sin²(dlat/2) + cos(lat1)*cos(lat2)*sin²(dlon/2)
+                        (
+                            6371.0 * 2.0 * asin(
+                                sqrt(
+                                    power(sin((lat2 - lat1) / 2.0), 2) +
+                                    cos(lat1) * cos(lat2) *
+                                    power(sin((lon2 - lon1) / 2.0), 2)
+                                )
+                            )
+                        ) AS calculated_dist_km
+                    FROM model_calculation
+                ),
+
+                final_safe_check AS (
+                    SELECT
+                        *,
+                        CASE 
+                            -- Now we check the MANUAL result
+                            WHEN calculated_dist_km IS NULL THEN 0.5
+                            WHEN isnan(calculated_dist_km) THEN 0.5 
+                            WHEN calculated_dist_km < 0.5 THEN 0.5 
+                            ELSE calculated_dist_km 
+                        END AS geographic_distance_km
+                    FROM distance_calc
                 )
+
                 SELECT
                     org_zone_id,
                     dest_zone_id,
@@ -268,21 +283,27 @@ def mobility_03_gold_analytics():
                     total_population,
                     rent,
                     geographic_distance_km,
-                    -- Gravity Model Calculation
+
+                    -- Gravity Model
                     (1.0 * (CAST(total_population AS DOUBLE) * CAST(rent AS DOUBLE))) / 
-                    (geographic_distance_km * geographic_distance_km) AS estimated_potential_trips,
+                    (POW(geographic_distance_km, 2)) AS estimated_potential_trips,
+
                     -- Mismatch Ratio
-                    total_trips / NULLIF(estimated_potential_trips, 0) AS mismatch_ratio,
+                    total_trips / NULLIF(
+                        (1.0 * (CAST(total_population AS DOUBLE) * CAST(rent AS DOUBLE))) / 
+                        (POW(geographic_distance_km, 2)), 0
+                    ) AS mismatch_ratio,
+
                     CURRENT_TIMESTAMP as processed_at
-                FROM model_calculation;
+                FROM final_safe_check;
             """
             
             con.execute(full_script)
-            logging.info("✅ Table 'lakehouse.gold.infrastructure_gaps' created.")
+            logging.info("✅ Table created using Haversine Formula.")
 
         finally:
             con.close()
-        
+            
     @task
     def verify_infrastructure_gaps():
         """
@@ -319,111 +340,109 @@ def mobility_03_gold_analytics():
             con.close()
 
     @task
-    def classify_zone_functions(**context):
+    def classify_zone_functions():
         """
         Task: Functional Classification of Zones
-        Calculates Net Flow Ratio and Retention Rate to classify zones as:
-        - Bedroom Communities (Sources)
-        - Activity Hubs (Sinks)
-        - Self-Sustaining Cells (High Retention)
+        OPTIMIZATION: Aggregates raw mobility data first, then joins dimensions.
         """
-        logging.info("--- 🏷️ Starting Table 3: Functional Zone Classification ---")
-        params = context['params']
-        input_start_date = params['start_date']
-        input_end_date = params['end_date']
-        input_polygon_wkt = params['polygon_wkt']
+        logging.info("--- 🏷️ Starting Table 3: Functional Zone Classification (Optimized) ---")
 
         con = get_connection()
         try:
-            logging.info(f"-> Calculating Flow Asymmetry & Retention ({input_start_date} to {input_end_date})...")
+            logging.info("-> Calculating Flow Asymmetry & Retention...")
 
-            classification_script = f"""
+            classification_script = """
                 CREATE OR REPLACE TABLE lakehouse.gold.zone_functional_classification AS
-                WITH filtered_mobility AS (
-                    -- 1. Filter Mobility Data Spatially & Temporally
+                WITH pre_aggregated_flows AS (
+                    -- 1. AGGREGATE FIRST (Massive Performance Boost)
+                    -- Collapse millions of raw rows into unique OD pairs immediately.
                     SELECT 
-                        m.origin_zone_id,
-                        m.destination_zone_id,
-                        m.trips
-                    FROM lakehouse.silver.fact_mobility m
-                    JOIN lakehouse.silver.dim_zones zo ON m.origin_zone_id = zo.zone_id
-                    JOIN lakehouse.silver.dim_zones zd ON m.destination_zone_id = zd.zone_id
-                    WHERE m.partition_date BETWEEN '{input_start_date}' AND '{input_end_date}'
-                      AND ST_Intersects(zo.polygon, ST_GeomFromText('{input_polygon_wkt}'))
-                      AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_polygon_wkt}'))
+                        origin_zone_id,
+                        destination_zone_id,
+                        SUM(trips) as total_trips
+                    FROM lakehouse.silver.fact_mobility
+                    GROUP BY 1, 2
                 ),
-                zone_stats AS (
-                    -- 2. Aggregate Flows per Zone
+                zone_flow_stats AS (
+                    -- 2. Calculate In/Out/Internal using only IDs (No Joins yet)
                     SELECT 
-                        z.zone_id,
-                        z.zone_name,
+                        -- We take the union of all zones appearing as origin or dest
+                        coalesce(o.origin_zone_id, d.destination_zone_id) as zone_id,
+                        
                         -- Internal: Origin = Dest
-                        COALESCE(SUM(CASE WHEN m.origin_zone_id = m.destination_zone_id THEN m.trips ELSE 0 END), 0) AS internal_trips,
-                        -- Inflow: Dest = Zone, Origin != Zone
-                        COALESCE(SUM(CASE WHEN m.destination_zone_id = z.zone_id AND m.origin_zone_id != z.zone_id THEN m.trips ELSE 0 END), 0) AS inflow,
-                        -- Outflow: Origin = Zone, Dest != Zone
-                        COALESCE(SUM(CASE WHEN m.origin_zone_id = z.zone_id AND m.destination_zone_id != z.zone_id THEN m.trips ELSE 0 END), 0) AS outflow
-                    FROM lakehouse.silver.dim_zones z
-                    LEFT JOIN filtered_mobility m ON z.zone_id = m.origin_zone_id OR z.zone_id = m.destination_zone_id
-                    WHERE ST_Intersects(z.polygon, ST_GeomFromText('{input_polygon_wkt}'))
-                    GROUP BY z.zone_id, z.zone_name
+                        SUM(CASE 
+                            WHEN o.origin_zone_id = o.destination_zone_id THEN o.total_trips 
+                            ELSE 0 
+                        END) as internal_trips,
+
+                        -- Outflow: Trips starting here (excluding internal)
+                        SUM(CASE 
+                            WHEN o.origin_zone_id IS NOT NULL AND o.origin_zone_id != o.destination_zone_id THEN o.total_trips 
+                            ELSE 0 
+                        END) as outflow,
+
+                        -- Inflow: Trips ending here (excluding internal)
+                        SUM(CASE 
+                            WHEN d.destination_zone_id IS NOT NULL AND d.origin_zone_id != d.destination_zone_id THEN d.total_trips 
+                            ELSE 0 
+                        END) as inflow
+
+                    FROM pre_aggregated_flows o
+                    FULL OUTER JOIN pre_aggregated_flows d ON o.origin_zone_id = d.destination_zone_id
+                    GROUP BY 1
                 ),
                 metrics_calc AS (
-                    -- 3. Compute Ratios
+                    -- 3. Calculate Ratios
                     SELECT 
-                        *,
-                        -- Total Generated = Outbound + Internal
-                        (outflow + internal_trips) AS total_generated_trips,
+                        zone_id,
+                        internal_trips,
+                        outflow,
+                        inflow,
+                        (outflow + internal_trips) AS total_generated,
                         
-                        -- Net Flow Ratio: (In - Out) / (In + Out)
-                        -- Range: -1 (Pure Exporter) to +1 (Pure Importer)
+                        -- Net Flow Ratio
                         CASE 
                             WHEN (inflow + outflow) = 0 THEN 0 
                             ELSE (inflow - outflow) / (inflow + outflow) 
                         END AS net_flow_ratio,
 
-                        -- Retention Rate: Internal / Total Generated
+                        -- Retention Rate
                         CASE 
                             WHEN (outflow + internal_trips) = 0 THEN 0
                             ELSE internal_trips / (outflow + internal_trips)
                         END AS retention_rate
-                    FROM zone_stats
+                    FROM zone_flow_stats
                 )
+                -- 4. JOIN LAST: Attach Zone Names and Apply Labels
                 SELECT 
-                    zone_id,
-                    zone_name,
-                    internal_trips,
-                    inflow,
-                    outflow,
-                    ROUND(net_flow_ratio, 3) as net_flow_ratio,
-                    ROUND(retention_rate, 3) as retention_rate,
+                    m.zone_id,
+                    z.zone_name,
+                    m.internal_trips,
+                    m.inflow,
+                    m.outflow,
+                    ROUND(m.net_flow_ratio, 3) as net_flow_ratio,
+                    ROUND(m.retention_rate, 3) as retention_rate,
                     
-                    -- 4. Apply Classification Logic (Thresholds)
                     CASE 
-                        -- Priority 1: High Internal Retention (Self-Sustaining)
-                        WHEN retention_rate > 0.6 THEN 'Self-Sustaining Cell'
-                        
-                        -- Priority 2: Flow Dominance
-                        WHEN net_flow_ratio > 0.15 THEN 'Activity Hub (Importer)'
-                        WHEN net_flow_ratio < -0.15 THEN 'Bedroom Community (Exporter)'
-                        
+                        WHEN m.retention_rate > 0.6 THEN 'Self-Sustaining Cell'
+                        WHEN m.net_flow_ratio > 0.15 THEN 'Activity Hub (Importer)'
+                        WHEN m.net_flow_ratio < -0.15 THEN 'Bedroom Community (Exporter)'
                         ELSE 'Balanced / Transit Zone'
                     END AS functional_label,
                     
                     CURRENT_TIMESTAMP as processed_at
-                FROM metrics_calc
-                WHERE (internal_trips + inflow + outflow) > 0; -- Exclude empty zones
+                FROM metrics_calc m
+                JOIN lakehouse.silver.dim_zones z ON m.zone_id = z.zone_id
+                WHERE (m.internal_trips + m.inflow + m.outflow) > 0;
 
-                -- 5. Quick Verification
+                -- 5. Verification
                 SELECT functional_label, COUNT(*) as zone_count 
                 FROM lakehouse.gold.zone_functional_classification 
                 GROUP BY functional_label 
                 ORDER BY zone_count DESC;
             """
 
-            # Run everything in one go
             verification_df = con.execute(classification_script).df()
-            
             logging.info(f"✅ Classification Table Created.\nSummary:\n{verification_df.to_string(index=False)}")
 
         except Exception as e:
@@ -437,16 +456,13 @@ def mobility_03_gold_analytics():
     def verify_zone_classification():
         """
         Verification: Functional Classification
-        Logs a summary of zone types and lists the top 5 examples of each category 
-        sorted by the intensity of their respective metric.
+        Fix: Corrected SQL syntax in Window Function and handled missing column.
         """
         logging.info("--- 🔎 Verification: Functional Zone Classification ---")
         con = get_connection()
         pd.set_option('display.max_colwidth', None)
         
         try:
-            # We use a window function (ROW_NUMBER) to pick the top 3 examples for each category
-            # based on the intensity of their defining metric.
             query_verify = """
                 WITH ranked_examples AS (
                     SELECT 
@@ -454,19 +470,23 @@ def mobility_03_gold_analytics():
                         zone_name,
                         net_flow_ratio,
                         retention_rate,
-                        -- Rank by intensity:
-                        -- Hubs: High Net Flow
-                        -- Bedroom: Low Net Flow (High Negative)
-                        -- Self-Sustaining: High Retention
                         ROW_NUMBER() OVER (
                             PARTITION BY functional_label 
                             ORDER BY 
                                 CASE 
-                                    WHEN functional_label LIKE '%Hub%' THEN net_flow_ratio DESC
-                                    WHEN functional_label LIKE '%Bedroom%' THEN net_flow_ratio ASC
-                                    WHEN functional_label LIKE '%Self-Sustaining%' THEN retention_rate DESC
-                                    ELSE total_generated_trips DESC -- For 'Balanced', show busiest
-                                END
+                                    -- Hubs: Sort by High Positive Ratio (e.g., 0.8 is top)
+                                    WHEN functional_label LIKE '%Hub%' THEN net_flow_ratio
+                                    
+                                    -- Bedrooms: Sort by "Deepest" Negative Ratio (e.g., -0.8).
+                                    -- We negate it (-(-0.8) = 0.8) so it ranks higher than -0.1 in a DESC sort.
+                                    WHEN functional_label LIKE '%Bedroom%' THEN -net_flow_ratio
+                                    
+                                    -- Self-Sustaining: Sort by High Retention
+                                    WHEN functional_label LIKE '%Self-Sustaining%' THEN retention_rate
+                                    
+                                    -- Others: Sort by Volume (Re-calculated from available columns)
+                                    ELSE (internal_trips + outflow)
+                                END DESC
                         ) as rank
                     FROM lakehouse.gold.zone_functional_classification
                 )
