@@ -8,7 +8,7 @@ import logging
 import os
 
 @dag(
-    dag_id="mobility_03_gold_analytics",
+    dag_id="gold_tables_generation",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
@@ -303,7 +303,7 @@ def mobility_03_gold_analytics():
 
         finally:
             con.close()
-            
+
     @task
     def verify_infrastructure_gaps():
         """
