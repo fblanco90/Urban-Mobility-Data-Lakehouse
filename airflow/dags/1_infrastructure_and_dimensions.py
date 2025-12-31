@@ -320,6 +320,7 @@ def infrastructure_and_dimensions():
                     ine_code,
                     zone_name,
                     g.geom AS polygon,
+                    ST_centroid(g.geom) AS centroid,
                     CURRENT_TIMESTAMP AS processed_at
                     
                 FROM raw_zones r
@@ -435,6 +436,18 @@ def infrastructure_and_dimensions():
         
         logging.info(f"✅ Table created succesfully: lakehouse.silver.dim_zone_holidays")
 
+    @task(retries=3, retry_delay=timedelta(minutes=1))
+    def sl_create_zone_distance_matrix():
+        with get_connection() as con:
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.dim_zone_distances AS
+                SELECT 
+                    a.zone_id AS origin_zone_id,
+                    b.zone_id AS destination_zone_id,
+                    GREATEST(0.5, st_distance(ST_Centroid(a.polygon), ST_Centroid(b.polygon)) / 1000) AS dist_km
+                FROM lakehouse.silver.dim_zones a, lakehouse.silver.dim_zones b
+                WHERE a.zone_id != b.zone_id;
+            """)
     # ==============================================================================
     # ORCHESTRATION FLOW
     # ==============================================================================
@@ -452,6 +465,7 @@ def infrastructure_and_dimensions():
 
     # Silver Transformation
     task_dim_zones = sl_ingest_dim_zones()
+    task_dim_zones_distances = sl_create_zone_distance_matrix()
     task_metric_pop = sl_ingest_metric_population()
     task_metric_rent = sl_ingest_metric_ine_rent()
     task_dim_holidays = sl_ingest_dim_zone_holidays()
@@ -469,7 +483,7 @@ def infrastructure_and_dimensions():
 
     [task_geo, task_zoning, task_mapping] >> task_dim_zones
 
-    task_dim_zones >> task_metric_pop
+    task_dim_zones >> [task_metric_pop, task_dim_zones_distances]
     task_pop >> task_metric_pop
 
     task_dim_zones >> task_metric_rent

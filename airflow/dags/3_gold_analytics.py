@@ -8,8 +8,6 @@ from sklearn.cluster import KMeans
 import logging
 import os
 
-# --- CONFIGURATION ---
-# Covers Spain entirely including the islands, Ceuta and Melilla
 
 @dag(
     dag_id="3_gold_analytics",
@@ -195,6 +193,10 @@ def gold_analytics():
 
             # We create one massive SQL script
             full_script = f"""
+                -- Set local memory limits for this specific execution
+                SET max_memory = '2GB';
+                SET temp_directory = '/tmp/duckdb_temp';
+                
                 CREATE OR REPLACE TABLE lakehouse.gold.infrastructure_gaps AS
                 WITH od_pairs AS (
                     SELECT
@@ -202,57 +204,40 @@ def gold_analytics():
                         destination_zone_id,
                         SUM(trips) AS total_actual_trips
                     FROM lakehouse.silver.fact_mobility
+                    WHERE partition_date BETWEEN '2023-01-01' AND '2023-12-31'
                     GROUP BY 1, 2
                 ),
-                unique_rent AS (
-                    SELECT zone_id, income_per_capita AS rent
-                    FROM lakehouse.silver.metric_ine_rent
-                    WHERE year = 2023
-                ),
-                model_calculation AS (
-                    SELECT
-                        m.origin_zone_id AS org_zone_id,
-                        m.destination_zone_id AS dest_zone_id,
-                        p.population AS total_population,               -- P_i
-                        r.rent,                                         -- E_j
-                        m.total_actual_trips AS total_trips,            -- Actual trips
-                        
-                        -- Calculate distance (Spheroid)
-                        -- We use ST_Distance because geometries are in a projected coordinate system (meters) - computationally more efficient
-                        GREATEST(
-                            0.5, 
-                            ST_Distance(
-                                ST_Centroid(z_org.polygon), 
-                                ST_Centroid(z_dest.polygon)
-                            ) / 1000 
-                        ) AS geographic_distance_km
-                            
-                    FROM od_pairs AS m
-                    JOIN lakehouse.silver.metric_population AS p ON m.origin_zone_id = p.zone_id
-                    JOIN unique_rent AS r ON m.destination_zone_id = r.zone_id
-                    JOIN lakehouse.silver.dim_zones as z_org ON m.origin_zone_id = z_org.zone_id
-                    JOIN lakehouse.silver.dim_zones as z_dest ON m.destination_zone_id = z_dest.zone_id
-
-                    WHERE p.population > 0 
-                      AND r.rent > 0
-                      AND z_org.polygon IS NOT NULL
-                      AND z_dest.polygon IS NOT NULL
-                      AND m.origin_zone_id != m.destination_zone_id 
+                zone_metrics AS (
+                -- Consolidate population (Pi) and income (Ej) as a proxy for economic activity
+                SELECT 
+                    z.zone_id, 
+                    p.population, 
+                    r.income_per_capita AS rent
+                FROM lakehouse.silver.dim_zones z
+                JOIN lakehouse.silver.metric_population p ON z.zone_id = p.zone_id
+                JOIN lakehouse.silver.metric_ine_rent r ON z.zone_id = r.zone_id
+                WHERE r.year = 2023
                 )
+               
                 SELECT
-                    org_zone_id,
-                    dest_zone_id,
-                    total_trips,
-                    total_population,
-                    rent,
-                    geographic_distance_km,
+                    m.origin_zone_id AS org_id,
+                    m.destination_zone_id AS dest_id,
+                    m.total_actual_trips,
+                    d.dist_km,
                     -- Gravity Model Calculation
-                    (1.0 * (CAST(total_population AS DOUBLE) * CAST(rent AS DOUBLE))) / 
-                    (geographic_distance_km * geographic_distance_km) AS estimated_potential_trips,
+                    (1.0 * (o.population * de.rent) / (d.dist_km * d.dist_km)) AS estimated_potential_trips,
                     -- Mismatch Ratio
-                    total_trips / NULLIF(estimated_potential_trips, 0) AS mismatch_ratio,
+                    m.total_actual_trips / NULLIF((1.0 * (o.population * de.rent) / (d.dist_km * d.dist_km)), 0) AS mismatch_ratio, 
                     CURRENT_TIMESTAMP as processed_at
-                FROM model_calculation;
+                FROM od_pairs m
+                -- Efficient join with the pre-calculated Silver distance matrix
+                JOIN lakehouse.silver.dim_zone_distances d 
+                    ON m.origin_zone_id = d.origin_zone_id 
+                    AND m.destination_zone_id = d.destination_zone_id
+                -- Join origin metrics (Population Pi)
+                JOIN zone_metrics o ON m.origin_zone_id = o.zone_id
+                -- Join destination metrics (Economic Attraction Ej)
+                JOIN zone_metrics de ON m.destination_zone_id = de.zone_id;
             """
             
             con.execute(full_script)
