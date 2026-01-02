@@ -419,8 +419,12 @@ def infrastructure_and_dimensions():
                             DAY(strptime("Dia", '%d/%m/%Y'))
                         ) AS holiday_date
                     FROM lakehouse.bronze.work_calendars
-                    WHERE "Tipo de Festivo" ILIKE '%festivo nacional%'
-                    OR "Tipo de Festivo" ILIKE '%fiesta nacional%'
+                    WHERE (
+                        "Tipo de Festivo" ILIKE '%festivo nacional%' 
+                        OR "Tipo de Festivo" ILIKE '%fiesta nacional%'
+                    )
+                    -- FILTRO DE AÑO AQUÍ:
+                    AND YEAR(strptime("Dia", '%d/%m/%Y')) = 2023
                 )
                 SELECT 
                     z.zone_id,
