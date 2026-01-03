@@ -1,7 +1,6 @@
 from datetime import timedelta
-from itertools import count
 from airflow.decorators import dag, task
-from utils_db import get_connection
+from airflow.dags.utils_db import get_connection
 import logging
 import requests
 
@@ -418,8 +417,12 @@ def infrastructure_and_dimensions():
                             DAY(strptime("Dia", '%d/%m/%Y'))
                         ) AS holiday_date
                     FROM lakehouse.bronze.work_calendars
-                    WHERE "Tipo de Festivo" ILIKE '%festivo nacional%'
-                    OR "Tipo de Festivo" ILIKE '%fiesta nacional%'
+                    WHERE (
+                        "Tipo de Festivo" ILIKE '%festivo nacional%' 
+                        OR "Tipo de Festivo" ILIKE '%fiesta nacional%'
+                    )
+                    -- FILTRO DE AÑO AQUÍ:
+                    AND YEAR(strptime("Dia", '%d/%m/%Y')) = 2023
                 )
                 SELECT 
                     z.zone_id,
@@ -443,10 +446,11 @@ def infrastructure_and_dimensions():
                 SELECT 
                     a.zone_id AS origin_zone_id,
                     b.zone_id AS destination_zone_id,
-                    GREATEST(0.5, st_distance_spheroid(ST_Centroid(a.polygon), ST_Centroid(b.polygon)) / 1000) AS dist_km
+                    GREATEST(0.5, st_distance(ST_Centroid(a.polygon), ST_Centroid(b.polygon)) / 1000) AS dist_km
                 FROM lakehouse.silver.dim_zones a, lakehouse.silver.dim_zones b
                 WHERE a.zone_id != b.zone_id;
             """)
+
     # ==============================================================================
     # ORCHESTRATION FLOW
     # ==============================================================================
@@ -492,4 +496,3 @@ def infrastructure_and_dimensions():
     task_calendars >> task_dim_holidays
 
 infrastructure_and_dimensions()
-
