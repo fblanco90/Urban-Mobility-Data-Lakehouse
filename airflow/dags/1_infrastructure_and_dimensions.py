@@ -1,6 +1,6 @@
 from datetime import timedelta
 from airflow.decorators import dag, task
-from airflow.dags.utils_db import get_connection
+from utils_db import get_connection
 import logging
 import requests
 
