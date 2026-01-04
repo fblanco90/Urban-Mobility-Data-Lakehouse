@@ -152,6 +152,4 @@ The orchestration logic is divided into specialized DAGs to ensure modularity, s
     
 4.  **Business Reporting DAGs (4, 5 & 6)**: A set of independent, on-demand DAGs designed to query the pre-computed Gold layer. These are isolated from the ELT process to allow "Transport Experts" to generate specific reports (e.g., polygon filters or specific time windows) without re-processing the underlying data.
 
-7.  **Master Orchestrator DAG**: A controller pipeline that manages the sequential dependencies between infrastructure setup, data ingestion, and model training. It ensures referential integrity across the entire Lakehouse.
-
 ---
