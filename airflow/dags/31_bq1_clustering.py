@@ -29,7 +29,6 @@ S3_KEY_PREFIX = "results/bq1/"
 )
 def gold_analytics():
 
-    # --- TYPICAL DAY PATTERNS - AGGREGATION (AWS BATCH) ---
     sql_profiles = """
     CREATE OR REPLACE TABLE silver.tmp_gold_profiles_agg AS
     SELECT
@@ -48,7 +47,6 @@ def gold_analytics():
         memory="12GB"
     )
 
-    # --- TYPICAL DAY PATTERNS - K-MEANS (LOCAL AIRFLOW) ---
     @task
     def process_gold_patterns_locally():
         # Step A: Fetch data from the table Batch just created
@@ -89,7 +87,6 @@ def gold_analytics():
     @task
     def cleanup():
         with get_connection() as con:            
-            # Cleanup intermediate table
             con.execute("DROP TABLE IF EXISTS silver.tmp_gold_profiles_agg;")
             con.execute("DROP TABLE IF EXISTS gold.dim_cluster_assignments;")
 
@@ -100,7 +97,6 @@ def gold_analytics():
         """
         logging.info("--- 🎨 Generating Visualization for S3 ---")
         
-        # 1. Retrieve Parameters
         params = context['params']
         start_dt = params['start_date']
         end_dt = params['end_date']
@@ -108,7 +104,6 @@ def gold_analytics():
         con = get_connection()
 
         try:
-            # 2. Query Data from Gold Layer
             query = """
             SELECT 
                 hour, 

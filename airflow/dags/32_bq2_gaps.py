@@ -1,18 +1,14 @@
 import os
-
 from airflow.hooks.base import BaseHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sdk import dag, task, Param
-
 from pendulum import datetime
 import pandas as pd
 import logging
 from keplergl import KeplerGl
-
 from utils_db import get_connection, run_batch_sql
 
 
-# Polígono en metros (EPSG:25830)
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
 
 aws = BaseHook.get_connection("aws_s3_conn")
@@ -38,7 +34,6 @@ S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
 )
 def gold_analytics():
 
-    # --- 1. INFRASTRUCTURE GAPS (AWS BATCH) ---
     sql_gaps = """
         CREATE OR REPLACE TABLE gold.infrastructure_gaps AS
         WITH trips_aggregated AS (
@@ -214,7 +209,6 @@ def gold_analytics():
         os.remove(local_path)
         logging.info("Mapa de Ranking Zonal subido exitosamente a S3.")
     
-
     @task
     def kepler_mobility(**context):
         params = context['params']
@@ -356,7 +350,7 @@ def gold_analytics():
         os.remove(local_path)
         logging.info("Mapa Kepler subido exitosamente a S3.")
 
-    # Orchestatration
+    # Orchestration
     task_batch_gaps >> [ranking_service(), kepler_mobility()]
 
 gold_analytics()
