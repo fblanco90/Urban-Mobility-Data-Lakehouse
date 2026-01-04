@@ -8,3 +8,8 @@ pyspainmobility
 requests
 apache-airflow-providers-amazon
 apache-airflow-providers-postgres
+folium
+shapely
+pyproj
+boto3
+keplergl
