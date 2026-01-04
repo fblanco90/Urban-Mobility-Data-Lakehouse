@@ -15,10 +15,10 @@ import matplotlib.pyplot as plt
 
 # --- CONFIGURATION ---
 S3_BUCKET = "ducklake-bdproject"
-S3_KEY_PREFIX = "results/"
+S3_KEY_PREFIX = "results/bq1/"
 
 @dag(
-    dag_id="mobility_04_visualization_to_s3",
+    dag_id="bq1_visualization_clustering",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,

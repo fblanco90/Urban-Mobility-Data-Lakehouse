@@ -88,7 +88,7 @@ def get_connection():
     logging.info(f"✅ Connected to Lakehouse at s3://{s3_bucket}")
     return con
 
-def run_batch_sql(task_id, sql_query, memory="12GB"):
+def run_batch_sql(task_id, sql_query, memory="16GB", vcpu=2):
     """
     Standardizes the creation of BatchOperators for the duckrunner image.
     """
@@ -96,6 +96,8 @@ def run_batch_sql(task_id, sql_query, memory="12GB"):
     aws = BaseHook.get_connection("aws_s3_conn")
     s3_bucket = aws.extra_dejson.get('bucket_name', 'ducklake-bdproject')
     s3_data_path = f"s3://{s3_bucket}/lakehouse/"
+
+    mem_mb = int(memory.replace("GB", "")) * 1024
 
     return BatchOperator(
         task_id=task_id,
@@ -106,6 +108,10 @@ def run_batch_sql(task_id, sql_query, memory="12GB"):
         aws_conn_id='aws_s3_conn',
         container_overrides={
             'command': [],
+            'resourceRequirements': [
+                {'value': str(vcpu), 'type': 'VCPU'},
+                {'value': str(mem_mb), 'type': 'MEMORY'}
+            ],
             'environment': [
                 {'name': 'memory', 'value': memory},
                 {'name': 'AWS_DEFAULT_REGION', 'value': 'eu-central-1'},

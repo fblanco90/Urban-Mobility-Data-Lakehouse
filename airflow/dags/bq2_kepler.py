@@ -10,6 +10,7 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 # Polígono en metros (EPSG:25830)
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
+# DEFAULT_POLYGON = "POLYGON((-0.55 39.35, -0.25 39.35, -0.25 39.65, -0.55 39.65, -0.55 39.35))"
 
 @dag(
     dag_id="bq2_consultation_kepler",
@@ -17,7 +18,13 @@ DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 7150
     schedule=None,
     catchup=False,
     params={
-        "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)")
+        "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)"),
+        "input_crs": Param(
+            "EPSG:25830", 
+            enum=["EPSG:25830", "OGC:CRS84", "EPSG:4326"], 
+            title="Coordinate Reference System (CRS)",
+            description="25830 (Meters), CRS84 (Lon/Lat), 4326 (Lat/Lon)"
+        )
     },
     tags=['mobility', 'visualization', 'kepler']
 )
@@ -28,14 +35,29 @@ def mobility_06_gaps_kepler():
         params = context['params']
         run_id = context['run_id']
         polygon_wkt = params['polygon_wkt']
+        input_crs = params['input_crs']
+
+        # Construcción dinámica de la geometría de filtrado
+        if input_crs == "EPSG:25830":
+            # Caso 1: Ya está en el sistema de la capa Silver (metros)
+            filter_geom = f"ST_GeomFromText('{polygon_wkt}')"
+            
+        elif input_crs == "OGC:CRS84":
+            # Caso 2: Estándar GIS (Longitud, Latitud)
+            filter_geom = f"ST_Transform(ST_GeomFromText('{polygon_wkt}'), 'OGC:CRS84', 'EPSG:25830')"
+            
+        elif input_crs == "EPSG:4326":
+            # Caso 3: Estándar Geodésico (Latitud, Longitud)
+            filter_geom = f"ST_Transform(ST_GeomFromText('{polygon_wkt}'), 'EPSG:4326', 'EPSG:25830')"
         
         # Transformamos el polígono a long y lat para poder usar Kepler.gl
         con = get_connection()
+
         df = con.execute(f"""
             WITH municipios_in_polygon AS (
                 SELECT zone_id, centroid, polygon
                 FROM lakehouse.silver.dim_zones
-                WHERE ST_Contains(ST_GeomFromText('{polygon_wkt}'), polygon)
+                WHERE ST_Contains({filter_geom}, polygon)
             )
             SELECT 
                 g.total_trips as actual_trips, 
@@ -95,7 +117,7 @@ def mobility_06_gaps_kepler():
                                         "category": "Uber",
                                         "colors": ["#5A1846", "#900C3F", "#C70039", "#E3611C", "#F1920E", "#FFC300"]
                                     },
-                                    "sizeRange": [0.9, 0.9]
+                                    "sizeRange": [0.8, 0.8]
                                 }
                             },
                             "visualChannels": {
