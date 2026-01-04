@@ -37,18 +37,18 @@ The layers have not been updated from last sprint.
 
 ### 3.1. Bronze Layer Ingestion `(Done)`
 **Schema:**
-- ![alt text](../diagrams/Sprint3/Bronze_Schema_diagramS3.png)
+- ![alt text](../diagrams/Sprint4/Bronze_Schema_diagramS4.png)
 ---
 
 ### 3.2. Silver Layer Transformation `(Done)`
 **Schema:**
-- ![alt text](../diagrams/Sprint3/Silver_Schema_diagramS3.png)
+- ![alt text](../diagrams/Sprint4/Silver_Schema_diagramS4.png)
 
 ---
 
 ### 3.3. Gold Layer Analytics `(Done)`
 **Schema:**
-- ![alt text](../diagrams/Sprint3/Gold_Schema_diagramS3.png)
+- ![alt text](../diagrams/Sprint4/Gold_Schema_diagramS4.png)
 
 ---
 
