@@ -180,6 +180,13 @@ def gold_analytics():
                     t BIGINT
                 );
             """)
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.silver.tmp_actuals (
+                    o BIGINT,
+                    d BIGINT,
+                    t BIGINT
+                );
+            """)
         logging.info("✅ Temporary table 'tmp_actuals_daily' created.")
 
     @task(max_active_tis_per_dag=4, 
@@ -203,6 +210,19 @@ def gold_analytics():
         logging.info(f"✅ Aggregated trips for {single_date}.")
 
     @task
+    def aggregate_all_trips():
+        with get_connection() as con:
+            con.execute(f"""
+                INSERT INTO lakehouse.silver.tmp_actuals
+                SELECT
+                    o, d,
+                    SUM(t) AS total_trips
+                FROM lakehouse.silver.tmp_actuals_daily
+                GROUP BY 1,2;
+                """)
+        logging.info(f"✅ Aggregated trips.")
+
+    @task
     def create_metrics_and_rents_tables():
         """Create smaller reference tables for metrics and rents."""
         with get_connection() as con:
@@ -221,20 +241,19 @@ def gold_analytics():
 
     @task
     def compute_potential():
-        """Compute potential trips for all tmp_actuals_daily."""
+        """Compute potential trips for all tmp_actuals."""
         with get_connection() as con:
             con.execute("""
-                CREATE OR REPLACE TABLE lakehouse.silver.potential_daily AS
+                CREATE OR REPLACE TABLE lakehouse.silver.potential AS
                 SELECT
                     act.o AS org_zone_id,
                     act.d AS dest_zone_id,
-                    act.partition_date,
                     act.t AS total_trips,
                     m1.pop AS total_population,
                     m2.r AS rent,
                     dist.dist_km,
-                    (1.0 * (m1.pop * m2.r)) / (dist.dist_km * dist.dist_km) AS potential
-                FROM lakehouse.silver.tmp_actuals_daily act
+                    (m1.pop * m2.r) / (dist.dist_km * dist.dist_km) AS gravity_score
+                FROM lakehouse.silver.tmp_actuals act
                 JOIN lakehouse.silver.metrics_daily m1 ON act.o = m1.id
                 JOIN lakehouse.silver.rents_daily   m2 ON act.d = m2.id
                 JOIN lakehouse.silver.dim_zone_distances dist
@@ -252,14 +271,15 @@ def gold_analytics():
                 SELECT
                     org_zone_id,
                     dest_zone_id,
-                    partition_date,
                     total_trips,
-                    total_population,
-                    rent,
                     dist_km,
-                    potential,
-                    total_trips / NULLIF(potential, 0) AS mismatch_ratio
-                FROM lakehouse.silver.potential_daily;
+                    total_trips / NULLIF(
+                        gravity_score * (
+                            SELECT SUM(total_trips) / SUM(gravity_score) FROM lakehouse.silver.potential
+                        ),
+                        0
+                    ) AS mismatch_ratio
+                FROM lakehouse.silver.potential;
             """)
         logging.info("✅ Gold table 'infrastructure_gaps' created.")
 
@@ -268,9 +288,10 @@ def gold_analytics():
         """Drop temporary tables we no longer need."""
         with get_connection() as con:
             con.execute("DROP TABLE IF EXISTS lakehouse.silver.tmp_actuals_daily;")
+            con.execute("DROP TABLE IF EXISTS lakehouse.silver.tmp_actuals;")
             con.execute("DROP TABLE IF EXISTS lakehouse.silver.metrics_daily;")
             con.execute("DROP TABLE IF EXISTS lakehouse.silver.rents_daily;")
-            con.execute("DROP TABLE IF EXISTS lakehouse.silver.potential_daily;")
+            con.execute("DROP TABLE IF EXISTS lakehouse.silver.potential;")
         logging.info("Intermediate tables cleaned up.")
 
 
@@ -292,6 +313,6 @@ def gold_analytics():
     dates_list >> init_patterns >> agg_patterns >> run_kmeans_on_profiles() >> create_gold_typical_days() >> validate_clusters_vs_calendar() >> cleanup_intermediate_tables()
 
     # Table 2: Infrastructure Gaps Analysis
-    [dates_list, metrics] >> init_gaps >> agg_gaps >> compute_potential() >> compute_mismatch_ratio_and_create_gold() >> cleanup_intermediate_tables_gaps()
+    [dates_list, metrics] >> init_gaps >> agg_gaps >> aggregate_all_trips() >> compute_potential() >> compute_mismatch_ratio_and_create_gold() >> cleanup_intermediate_tables_gaps()
 
 gold_analytics()

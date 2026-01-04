@@ -35,3 +35,5 @@ airflow/dags/**/__pycache__/
 
 airflow/dags/.airflowignore
 
+airflow/dags/__pycache__/utils_db.cpython-312.pyc
+airflow/dags/__pycache__/utils_db.cpython-312.pyc

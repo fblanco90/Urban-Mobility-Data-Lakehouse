@@ -1,42 +1,52 @@
 import duckdb
 import os
-from airflow.sdk.bases.hook import BaseHook
 import logging
+from airflow.providers.amazon.aws.operators.batch import BatchOperator
+from airflow.hooks.base import BaseHook
 
 def get_connection():
     """
-    Returns a DuckDB connection configured for Neon (Metadata) + S3 (Storage)
-    using the Secret-based DuckLake configuration.
+    Returns a DuckDB connection. 
+    Detects if it's running in AWS Batch or locally in Airflow.
     """
-    # 1. Connect to In-Memory Compute
+    # 1. Start DuckDB
     con = duckdb.connect(database=':memory:')
     
     # 2. Load Extensions
-    # We need postgres_scanner to handle the Postgres Secret type
-    logging.info("⏳ 1. Descargando extensiones de DuckDB...")
     extensions = ['ducklake', 'spatial', 'httpfs', 'postgres_scanner']
     for ext in extensions:
         con.execute(f"INSTALL {ext}; LOAD {ext};")
 
-    logging.info("✅ Extensiones listas. Configurando Secretos...")
-    try:
-        # Retrieve Connections from Airflow
+    # 3. Detect Environment
+    is_remote = os.getenv('AWS_BATCH_JOB_ID') is not None
+
+    if is_remote:
+        logging.info("☁️ Detected Remote Environment (AWS Batch)")
+        # --- REMOTE CONFIGURATION ---
+        
+        # A. S3 Secret: Use IAM (No keys needed! Uses the Batch Job Role)
+        con.execute("CREATE OR REPLACE SECRET secreto_s3 (TYPE S3, PROVIDER 'iam');")
+
+        # B. Postgres Secret: Use Env Vars injected by Airflow BatchOperator
+        host = os.getenv('NEON_HOST')
+        user = os.getenv('NEON_USER')
+        password = os.getenv('NEON_PASSWORD')
+        port = os.getenv('NEON_PORT', '5432')
+        schema = os.getenv('NEON_SCHEMA', 'neondb')
+        s3_bucket = os.getenv('S3_BUCKET', 'ducklake-bdproject')
+        region = os.getenv('AWS_REGION', 'eu-central-1')
+
+    else:
+        logging.info("💻 Detected Local Environment (Airflow/Astro)")
+        from airflow.sdk.bases.hook import BaseHook
+        
         aws = BaseHook.get_connection("aws_s3_conn")
         neon = BaseHook.get_connection("neon_catalog_conn")
         
-        # Get S3 Bucket from Extra, default to a sensible name if missing
         s3_bucket = aws.extra_dejson.get('bucket_name', 'ducklake-bdproject')
         region = aws.extra_dejson.get('region_name', 'eu-central-1')
+        host, user, password, port, schema = neon.host, neon.login, neon.password, neon.port, neon.schema
 
-        logging.info(f"⚙️ Configuring Lakehouse. Metadata: {neon.host}, Storage: s3://{s3_bucket}")
-
-        # =========================================================================
-        # 3. CONFIGURE SECRETS (Replicating your working example)
-        # =========================================================================
-
-        # A. S3 Secret (For Data Storage Access)
-        # We use explicit keys from Airflow instead of 'credential_chain' to ensure
-        # it works on workers without IAM roles.
         con.execute(f"""
             CREATE OR REPLACE SECRET secreto_s3 (
                 TYPE S3,
@@ -46,74 +56,66 @@ def get_connection():
             );
         """)
 
-        # B. Postgres Secret (For Neon Metadata Access)
-        # Maps Airflow connection fields to DuckDB Postgres Secret
-        con.execute(f"""
-            CREATE OR REPLACE SECRET secreto_postgres (
-                TYPE POSTGRES,
-                HOST '{neon.host}',
-                PORT {neon.port or 5432},
-                DATABASE '{neon.schema}',
-                USER '{neon.login}',
-                PASSWORD '{neon.password}'
-            );
-        """)
-        # Note: Added SSL_MODE 'require' as Neon usually mandates it.
+    # =========================================================================
+    # 4. UNIVERSAL SECRETS & ATTACH (Same for both)
+    # =========================================================================
 
-        # C. DuckLake Secret (The Bridge)
-        # Links the DuckLake logic to the Postgres secret
-        con.execute("""
-            CREATE OR REPLACE SECRET secreto_ducklake (
-                TYPE ducklake,
-                METADATA_PATH '',
-                METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'secreto_postgres'}
-            );
-        """)
+    # Postgres Secret for Neon
+    con.execute(f"""
+        CREATE OR REPLACE SECRET secreto_postgres (
+            TYPE POSTGRES,
+            HOST '{host}',
+            PORT {port},
+            DATABASE '{schema}',
+            USER '{user}',
+            PASSWORD '{password}'
+        );
+    """)
 
-        # =========================================================================
-        # 4. ATTACH
-        # =========================================================================
-        
-        # We attach using the secret we just created.
-        # DATA_PATH points to where the Parquet files will live on S3.
-        s3_data_path = f"s3://{s3_bucket}/lakehouse/"
-        
-        attach_query = f"""
-            ATTACH 'ducklake:secreto_ducklake' AS lakehouse 
-            (DATA_PATH '{s3_data_path}')
-        """
-        
-        con.execute(attach_query)
-        logging.info(f"✅ Lakehouse successfully attached! (Neon + S3)")
+    # DuckLake Bridge
+    con.execute("""
+        CREATE OR REPLACE SECRET secreto_ducklake (
+            TYPE ducklake,
+            METADATA_PATH '',
+            METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'secreto_postgres'}
+        );
+    """)
 
-    except Exception as e:
-        logging.error(f"❌ Critical Error connecting to Lakehouse: {e}")
-        raise e
+    # Attach Lakehouse
+    s3_data_path = f"s3://{s3_bucket}/lakehouse/"
+    con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lakehouse (DATA_PATH '{s3_data_path}')")
     
+    logging.info(f"✅ Connected to Lakehouse at s3://{s3_bucket}")
     return con
 
-LAKEHOUSE_DIR = "/usr/local/airflow/include/lakehouse"
-METADATA_PATH = os.path.join(LAKEHOUSE_DIR, "metadata.duckdb")
+def run_batch_sql(task_id, sql_query, memory="12GB"):
+    """
+    Standardizes the creation of BatchOperators for the duckrunner image.
+    """
+    neon = BaseHook.get_connection("neon_catalog_conn")
+    aws = BaseHook.get_connection("aws_s3_conn")
+    s3_bucket = aws.extra_dejson.get('bucket_name', 'ducklake-bdproject')
+    s3_data_path = f"s3://{s3_bucket}/lakehouse/"
 
-def get_connection_local():
-    """
-    Returns a DuckDB connection with DuckLake, Spatial, and HTTPFS loaded.
-    """
-    # 1. Ensure the directory exists
-    os.makedirs(LAKEHOUSE_DIR, exist_ok=True)
-    
-    # 2. Connect to In-Memory Compute
-    con = duckdb.connect(database=':memory:')
-    
-    # 3. Load Extensions
-    # These allow us to read remote CSVs (httpfs), handle geometry (spatial), 
-    # and manage the table catalog (ducklake).
-    extensions = ['ducklake', 'spatial', 'httpfs']
-    for ext in extensions:
-        con.execute(f"INSTALL {ext}; LOAD {ext};")
-        
-    # 4. Attach the Lakehouse (Storage Layer)
-    # The 'ducklake:' prefix tells DuckDB to manage this as a lakehouse
-    con.execute(f"ATTACH 'ducklake:{METADATA_PATH}' AS lakehouse")
-    
-    return con
+    return BatchOperator(
+        task_id=task_id,
+        job_name=f"job_{task_id}",
+        job_definition='DuckJobDefinition',
+        job_queue='DuckJobQueue',
+        region_name='eu-central-1',
+        aws_conn_id='aws_s3_conn',
+        container_overrides={
+            'command': [],
+            'environment': [
+                {'name': 'memory', 'value': memory},
+                {'name': 'AWS_DEFAULT_REGION', 'value': 'eu-central-1'},
+                {'name': 'CONTR_POSTGRES', 'value': neon.password},
+                {'name': 'USUARIO_POSTGRES', 'value': neon.login},
+                {'name': 'HOST_POSTGRES', 'value': neon.host},
+                {'name': 'DATABASE_POSTGRES', 'value': 'neondb'},
+                {'name': 'PUERTO_POSTGRES', 'value': '5432'},
+                {'name': 'RUTA_S3_DUCKLAKE', 'value': s3_data_path},
+                {'name': 'SQL_QUERY', 'value': sql_query}
+            ],
+        }
+    )

@@ -40,6 +40,13 @@ def bq2_consultations():
             # Note: I corrected 'g.potential' to 'g.estimated_potential_trips' based on your previous DAG.
             # I also added ST_X/ST_Y extraction to get coordinates for KeplerGL.
             query_consult = f"""
+                WITH municipios_in_polygon AS (
+                    SELECT zone_id
+                    FROM lakehouse.dim_zones
+                    WHERE ST_Contains(
+                        ST_GeomFromText('{input_wkt}'),
+                        coordenadas
+                    )
                 SELECT 
                     g.origin_zone_id,
                     g.destination_zone_id,
@@ -48,26 +55,21 @@ def bq2_consultations():
                     ROUND(g.mismatch_ratio, 4) as mismatch_ratio,
                     
                     -- Extract Coordinates for Visualization (Centroids)
-                    ST_Y(ST_Centroid(zo.polygon)) as source_lat,
-                    ST_X(ST_Centroid(zo.polygon)) as source_lon,
-                    ST_Y(ST_Centroid(zd.polygon)) as target_lat,
-                    ST_X(ST_Centroid(zd.polygon)) as target_lon,
-
-                    -- Recalculate distance for reference
-                    ROUND(GREATEST(0.5, st_distance_spheroid(ST_Centroid(zo.polygon), ST_Centroid(zd.polygon))/1000), 2) AS dist_km
+                    ST_Y(zo.centroid) as source_lat,
+                    ST_X(zo.centroid) as source_lon,
+                    ST_Y(zd.centroid) as target_lat,
+                    ST_X(zd.centroid) as target_lon,
                 
                 FROM lakehouse.gold.infrastructure_gaps g
-                JOIN lakehouse.silver.dim_zones zo ON g.origin_zone_id = zo.zone_id
-                JOIN lakehouse.silver.dim_zones zd ON g.destination_zone_id = zd.zone_id
-                WHERE 
-                    ST_Intersects(zo.polygon, ST_GeomFromText('{input_wkt}'))
-                    AND ST_Intersects(zd.polygon, ST_GeomFromText('{input_wkt}'))
-                    AND g.total_trips > 10  -- Filter noise
+                JOIN municipios_in_polygon zo ON g.origin_zone_id = zo.zone_id
+                JOIN municipios_in_polygon zd ON g.destination_zone_id = zd.zone_id
+                WHERE g.total_trips > 10  -- Filter noise
                 ORDER BY g.mismatch_ratio ASC
                 LIMIT 10;
             """
             
             df_gaps = con.execute(query_consult).df()
+            logging.warning("Query executed, processing results...")
 
             if df_gaps.empty:
                 logging.warning("⚠️ No infrastructure gaps found within this polygon.")
