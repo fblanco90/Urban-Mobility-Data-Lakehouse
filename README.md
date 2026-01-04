@@ -7,7 +7,7 @@
 *   **Joan Sánchez Verdú**
 
 
-**Date:** December 2025
+**Date:** January 2026
 
 This project implements a **3-tier Data Lakehouse** (Bronze, Silver, Gold) designed to process and analyze public mobility data from the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE).
 
@@ -18,7 +18,7 @@ The infrastructure follows a Medallion Architecture, utilizing **DuckDB** for pr
 ```text
 .
 ├── airflow/                    # Airflow Orchestration (Astro Project)
-│   ├── dags/                   # DAGs for ELT (Data fetched via HTTP)
+│   ├── dags/                   # DAGs for ELT (Data fetched via HTTP) and utils
 │   └── requirements.txt        # Dependencies needed to run the DAGs
 ├── data/                       # Local Data Storage (NOT tracked by Git)
 │   ├── raw/                    # Source files for notebook experimentation
@@ -74,7 +74,7 @@ The orchestration layer is managed via the **Astro CLI**.
 
 ## ☁️ Cloud Lakehouse Configuration
 
-To enable the cloud storage and metadata catalog, you must configure two connections in the Airflow UI (**Admin -> Connections**):
+To enable cloud storage, metadata management, and elastic compute, you must configure the following in the Airflow UI (**Admin -> Connections**) and your AWS Console.
 
 ### Connection 1: AWS S3 (`aws_s3_conn`)
 *   **Conn Type:** `Amazon Web Services`
@@ -83,23 +83,62 @@ To enable the cloud storage and metadata catalog, you must configure two connect
 *   **Extra:** 
     ```json
     {
-    "region_name": "eu-central-1"
+    "region_name": "eu-central-1",
+    "bucket_name": "ducklake-dbproject"
     }
     ```
+*   **Note:** The IAM User associated with these keys must have the `batch:SubmitJob`, `batch:DescribeJobs`, and `iam:PassRole` permissions.
 
 ### Connection 2: Neon Postgres (`neon_catalog_conn`)
 *   **Conn Type:** `Postgres`
-*   **Host:** Your Neon hostname (e.g., `ep-cool-frog...aws.neon.tech`)
+*   **Host:** Your Neon hostname (e.g., `ep-winter-rain...aws.neon.tech`)
 *   **Schema/Database:** `neondb`
 *   **Login:** `neondb_owner`
 *   **Password:** Your Neon Password
 *   **Port:** `5432`
 
+### 🚀 AWS Batch Infrastructure (Elastic Compute)
+The project offloads heavy SQL transformations to **AWS Batch** to ensure high performance and avoid local memory issues. Ensure the following resources are created in your AWS Console (`eu-central-1`):
+
+1.  **Compute Environment:** 
+    *   **Name:** `DuckJobCompute` (or similar)
+    *   **Instance Types:** Memory-optimized (e.g., `r5.large`, `r5.xlarge`)
+    *   **Provisioning:** Spot instances are recommended for cost efficiency.
+2.  **Job Queue:**
+    *   **Name:** `DuckJobQueue`
+    *   **Priority:** 1
+3.  **Job Definition:**
+    *   **Name:** `DuckJobDefinition`
+    *   **Image:** `public.ecr.aws/p7o6v6h0/upv/duckrunner:latest`
+    *   **Resource Requests:** Minimum 2 vCPUs and 4GB-14GB RAM depending on task complexity.
+    *   **Job Role:** An IAM role with `AmazonS3FullAccess` and `CloudWatchLogsFullAccess`.
+    *   **Execution Role:** `ecsTaskExecutionRole` to allow pulling the image.
+
+
 ## 🧪 Verification
 
-A `connection_test` DAG is included in the `airflow/dags` folder. It is highly recommended to run this DAG first to verify that your Airflow environment can successfully communicate with both AWS S3 and the Neon Metadata Catalog. 
+Before running the main pipelines, it is highly recommended to run the following test DAGs to ensure your environment is correctly configured.
 
-The task will log a confirmation message upon a successful connection and then close the session.
+### 1. Local Connection Test (`00_connection_test`)
+This DAG verifies that your **local Airflow environment** can successfully retrieve credentials and communicate with both AWS S3 and the Neon Metadata Catalog. 
+
+*   **Action:** Triggers a local task that attempts to establish a connection using the defined hooks.
+*   **Success Indicator:** The task turns green, and the Airflow logs display a confirmation message: `✅ Connected`.
+
+### 2. AWS Batch & Infrastructure Test (`0_aws_batch_test`)
+This DAG performs a full end-to-end test of the **Cloud Infrastructure**. It verifies that Airflow can trigger a remote AWS Batch job, and that the remote instance can correctly access the storage and metadata layers using the provided environment variables.
+
+*   **Action:** Triggers a remote SQL command on an AWS instance that creates a temporary test table in the `gold` schema and immediately drops it.
+*   **What to expect:** 
+    1.  The task may stay in the `RUNNABLE` state for 1–3 minutes while AWS provisions a Spot instance.
+    2.  Once `RUNNING`, it executes the SQL using the `duckrunner` image.
+*   **Success Indicator:** 
+    1.  The Airflow task status turns to `SUCCEEDED`.
+    2.  The AWS CloudWatch logs (linked in the Airflow task details) show the message: `Finished executing the query`.
+
+---
+
+**Note:** If `00_connection_test` succeeds but `0_aws_batch_test` fails, check your AWS IAM permissions (specifically `iam:PassRole`) and ensure your Job Definition names match exactly in both the AWS Console and the DAG code.
 
 ## ⚙️ Data Pipelines (DAGs)
 
