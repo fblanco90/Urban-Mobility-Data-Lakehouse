@@ -1,0 +1,177 @@
+import io
+from airflow.sdk import dag, task, Param
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.hooks.base import BaseHook
+from pendulum import datetime
+from utils_db import get_connection, run_batch_sql
+import pandas as pd
+from sklearn.cluster import KMeans
+import logging
+import matplotlib
+matplotlib.use('Agg') 
+import matplotlib.pyplot as plt
+
+# --- CONFIGURATION ---
+aws = BaseHook.get_connection("aws_s3_conn")
+S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
+S3_KEY_PREFIX = "results/bq1/"
+
+@dag(
+    dag_id="31_bq1_clustering",
+    start_date=datetime(2023, 1, 1),
+    schedule=None,
+    catchup=False,
+    params={
+        "start_date": Param("20230101", type="string", description="YYYYMMDD"),
+        "end_date": Param("20230101", type="string", description="YYYYMMDD"),
+    },
+    tags=['mobility', 'gold', 'analytics', 'aws_batch']
+)
+def gold_analytics():
+
+    # --- TYPICAL DAY PATTERNS - AGGREGATION (AWS BATCH) ---
+    sql_profiles = """
+    CREATE OR REPLACE TABLE silver.tmp_gold_profiles_agg AS
+    SELECT
+        partition_date,
+        hour(period) as hour,
+        SUM(trips) as total_trips
+    FROM silver.fact_mobility
+    WHERE partition_date BETWEEN strptime('{{ params.start_date }}', '%Y%m%d')::DATE 
+                             AND strptime('{{ params.end_date }}', '%Y%m%d')::DATE
+    GROUP BY 1, 2;
+    """
+
+    task_batch_profiles = run_batch_sql(
+        task_id="batch_prepare_profiles", 
+        sql_query=sql_profiles, 
+        memory="12GB"
+    )
+
+    # --- TYPICAL DAY PATTERNS - K-MEANS (LOCAL AIRFLOW) ---
+    @task
+    def process_gold_patterns_locally():
+        # Step A: Fetch data from the table Batch just created
+        with get_connection() as con:
+            df_raw = con.execute("SELECT * FROM lakehouse.silver.tmp_gold_profiles_agg").df()
+        
+        if df_raw.empty:
+            logging.warning("No data found in tmp_gold_profiles_agg")
+            return
+
+        # Step B: Run K-Means
+        df_pivot = df_raw.pivot(index='partition_date', columns='hour', values='total_trips').fillna(0)
+        norm_data = df_pivot.div(df_pivot.sum(axis=1).replace(0, 1), axis=0)
+        kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto').fit(norm_data)
+        
+        df_clusters = pd.DataFrame({'partition_date': df_pivot.index, 'cluster_id': kmeans.labels_})
+        df_final = df_raw.merge(df_clusters, on='partition_date')
+        
+        gold_table = df_final.groupby(['cluster_id', 'hour'])['total_trips'].mean().reset_index()
+        gold_table.columns = ['cluster_id', 'hour', 'avg_trips']
+        gold_table['processed_at'] = pd.Timestamp.now()
+
+        # Step C: Save to Gold
+        with get_connection() as con:
+            con.register('tmp_gold_patterns', gold_table)
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.gold.typical_day_patterns AS
+                SELECT cluster_id::INT as cluster_id, hour::INT as hour, 
+                       avg_trips::DOUBLE as avg_trips, processed_at::TIMESTAMP as processed_at
+                FROM tmp_gold_patterns;
+            """)
+            con.register('tmp_assignments', df_clusters)
+            con.execute("""
+                CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
+                SELECT partition_date, cluster_id FROM tmp_assignments;
+            """)
+
+    @task
+    def cleanup():
+        with get_connection() as con:            
+            # Cleanup intermediate table
+            con.execute("DROP TABLE IF EXISTS silver.tmp_gold_profiles_agg;")
+            con.execute("DROP TABLE IF EXISTS gold.dim_cluster_assignments;")
+
+    @task
+    def plot_to_s3(**context):
+        """
+        Task: Fetch mobility patterns from Gold layer and upload plot to S3.
+        """
+        logging.info("--- 🎨 Generating Visualization for S3 ---")
+        
+        # 1. Retrieve Parameters
+        params = context['params']
+        start_dt = params['start_date']
+        end_dt = params['end_date']
+        
+        con = get_connection()
+
+        try:
+            # 2. Query Data from Gold Layer
+            query = """
+            SELECT 
+                hour, 
+                'Cluster ' || CAST(cluster_id AS VARCHAR) as pattern_name, 
+                avg_trips
+            FROM lakehouse.gold.typical_day_patterns
+            ORDER BY hour, cluster_id;
+            """
+            
+            logging.info("Fetching data from Gold table...")
+            df = con.execute(query).df()
+
+            if df.empty:
+                logging.error("❌ No data found in typical_day_patterns table.")
+                return
+
+            # 3. Pivot and Plot
+            pivot_df = df.pivot(index='hour', columns='pattern_name', values='avg_trips')
+            
+            logging.info(f"Generating plot for: {start_dt} to {end_dt}")
+            fig, ax = plt.subplots(figsize=(12, 7))
+            
+            pivot_df.plot(kind='line', ax=ax, marker='o', markersize=4, linewidth=2)
+            
+            ax.set_title(f'Typical Daily Mobility Patterns\nPeriod: {start_dt} - {end_dt}', fontsize=15)
+            ax.set_xlabel('Hour of Day', fontsize=12)
+            ax.set_ylabel('Average Trips', fontsize=12)
+            
+            ax.set_xticks(range(0, 24))
+            ax.set_xticklabels([f'{h:02d}:00' for h in range(24)], rotation=45)
+            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.legend(title='Profiles', bbox_to_anchor=(1.05, 1), loc='upper left')
+            
+            plt.tight_layout()
+
+            # 4. Save Plot to Memory Buffer
+            img_buffer = io.BytesIO()
+            plt.savefig(img_buffer, format='png', dpi=300)
+            img_buffer.seek(0)
+
+            # 5. Upload to Amazon S3
+            s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+            file_key = f"{S3_KEY_PREFIX}mobility_report_{start_dt}_{end_dt}.png"
+            
+            logging.info(f"Uploading file to S3: s3://{S3_BUCKET}/{file_key}")
+            
+            s3_hook.load_file_obj(
+                file_obj=img_buffer,
+                key=file_key,
+                bucket_name=S3_BUCKET,
+                replace=True
+            )
+            
+            logging.info("✅ Plot successfully uploaded to S3.")
+            plt.close(fig)
+
+        except Exception as e:
+            logging.error(f"❌ Visualization failed: {str(e)}")
+            raise e
+        finally:
+            con.close()
+
+    # --- ORCHESTRATION ---
+    task_batch_profiles >> process_gold_patterns_locally() >> cleanup() >> plot_to_s3()
+
+gold_analytics()
