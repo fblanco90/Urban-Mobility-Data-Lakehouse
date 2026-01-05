@@ -86,7 +86,7 @@ def gold_analytics():
 
     @task
     def cleanup():
-        with get_connection() as con:            
+        with get_connection() as con:
             con.execute("DROP TABLE IF EXISTS silver.tmp_gold_profiles_agg;")
             con.execute("DROP TABLE IF EXISTS gold.dim_cluster_assignments;")
 
