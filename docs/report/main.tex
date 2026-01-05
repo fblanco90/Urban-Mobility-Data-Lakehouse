@@ -47,7 +47,7 @@
 % --- METADATA ---
 \title{\textbf{Building a Scalable 3-Tier Data Lakehouse for Mobility Analysis in Spain}\\ Big Data Engineering Project \\}
 \author{
-    \textbf{Joan Sánchez Verdú} \and \textbf{María López Hernández} \and \textbf{Fernando Blanco Membrives} \\    
+    \textbf{María López Hernández} \and \textbf{Joan Sánchez Verdú} \and \textbf{Fernando Blanco Membrives} \\    
     % \textit{Link to Code Repository:}\\ \textit{\url{https://github.com/joanstudyai-code/MUCEIM-BDET-Project.git}}
 }
 \date{\today}
@@ -58,22 +58,27 @@
 
 \begin{abstract}
     \noindent 
-    \textbf{Abstract.} This paper presents the design and implementation of a scalable 3-tier Data Lakehouse architecture tailored for the analysis of large-scale mobility data in Spain. Leveraging open data from the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE), the system integrates high-volume Origin-Destination (OD) matrices with demographic and economic indicators. The infrastructure utilizes DuckDB for efficient analytical processing and DuckLake for ACID-compliant storage, orchestrated via Apache Airflow. We demonstrate the system's utility through two key use cases: characterizing typical daily mobility patterns and identifying transport infrastructure gaps using gravity models. The result is a robust, cost-effective platform enabling transport experts to derive data-driven insights for urban planning.
+    \textbf{Abstract.} The rapid digitalization of urban transport has generated massive volumes of mobility data, rendering traditional analytical workflows obsolete. This paper presents a scalable 3-tier Data Lakehouse architecture designed to analyze large-scale Spanish mobility data. By integrating high-volume Origin-Destination matrices from MITMA with INE socio-economic indicators, the system provides a robust foundation for urban analytics. The infrastructure leverages a serverless stack—utilizing \textit{DuckDB} for vectorized processing and \textit{DuckLake} for ACID transactions—orchestrated via Apache Airflow. We validate the architecture through three analytical use cases: temporal pattern clustering, infrastructure gap detection via gravity models, and functional zoning classification, demonstrating a cost-effective solution for data-driven transport planning.
 \end{abstract}
 
 % --- SECTIONS ---
 
 \section{Introduction}
 
-Mobility analysis is critical for modern urban planning...
+The availability of high-resolution mobility data from the Spanish Ministry of Transport (MITMA) has opened new avenues for urban planning. However, the sheer volume of these datasets (comprising billions of daily trip records) presents significant engineering challenges that exceed the capabilities of traditional analytical tools. Transport experts often lack the scalable infrastructure required to transform this raw big data into actionable insights.
+
+This project addresses this gap by implementing a Data Lakehouse architecture. By combining the cost-efficiency of data lakes with the transactional integrity of data warehouses, we propose a solution built on DuckDB and DuckLake. This infrastructure allows for the efficient processing of large-scale mobility matrices, enriching them with socio-economic context without the overhead of enterprise systems.
+
 
 \subsection{Objectives}
-The primary objective of this work was to construct a robust data infrastructure...
+The primary goal is to build a robust, reproducible data platform. The specific objectives are:
+
 \begin{itemize}
-    \item Build a scalable Lakehouse for mobility and economic data.
-    \item Implement ELT processes across Bronze, Silver, and Gold tiers.
-    \item Demonstrate analytical value through specific mobility use cases.
+    \item \textbf{Scalable Architecture:} Implement a 3-tier Lakehouse (Bronze, Silver, Gold) that decouples storage (S3) from compute (AWS Batch) to optimize costs and performance.
+    \item \textbf{Data Integration:} Automate ELT pipelines to clean and fuse heterogeneous sources, including mobility flows, census demographics, and vector geometries.
+    \item \textbf{Analytical Value:} Demonstrate the system's utility through advanced use cases, such as gravity models for infrastructure analysis and functional zoning classification.
 \end{itemize}
+
 
 
 
@@ -118,25 +123,23 @@ To categorize mobility patterns by day type (e.g., distinguishing standard workd
 
 
 
-
+\newpage
 \section{Lakehouse Architecture}
 The system follows the Medallion Architecture pattern, decoupled into storage and compute layers to ensure scalability.
 
 \subsection{Technology Stack}
-The platform is built upon a modular, open-source stack designed to decouple compute from storage, allowing for independent scaling and cost efficiency. The architecture leverages the following core components:
+The platform employs a modular architecture designed to decouple storage from compute, leveraging the following core components:
 
 \begin{itemize}
-    \item \textbf{Compute Engine (DuckDB \cite{duckdb}):} Selected for its high-performance, vectorized execution engine optimized for OLAP workloads. DuckDB serves as the primary processing unit, running in-process for orchestration tasks while being deployed via containerized environments for heavy transformations. This approach significantly reduces infrastructure overhead while maintaining the ability to process datasets larger than RAM through out-of-core execution.
+    \item \textbf{Compute Engine (DuckDB \cite{duckdb}):} A high-performance, in-process SQL OLAP engine. It handles vectorized data processing and supports out-of-core execution, allowing for the analysis of datasets larger than available RAM.
 
-    \item \textbf{Elastic Compute (AWS Batch \cite{aws_batch}):} To handle high-volume data and computationally intensive joins, the platform offloads heavy SQL workloads to \textit{AWS Batch}. This provides an ephemeral, cloud-native compute layer that automatically scales memory-optimized instances (e.g., EC2 R4 and R5 family) on demand. By executing DuckDB in the same cloud region as the data storage, the system minimizes network latency and maximizes throughput, while utilizing \textit{Spot Instances} to achieve up to a 90\% reduction in compute costs.
+    \item \textbf{Elastic Compute (AWS Batch \cite{aws_batch}):} Provides an ephemeral, scalable cloud compute layer. It offloads heavy transformation tasks to on-demand instances, optimizing costs through the use of Spot market resources.
     
-    \item \textbf{Lakehouse Management (DuckLake \cite{ducklake}):} A specialized extension that brings Data Lakehouse capabilities to the ecosystem. It provides ACID transaction support (Atomicity, Consistency, Isolation, Durability) and snapshot isolation. This ensures that long-running ingestion tasks do not block analytical queries and prevents data corruption during partial write failures.
-    \item \textbf{Storage - Cloud Infrastructure (Neon + S3):} The system adopts a cloud-native architecture that physically separates data from metadata:
-    \begin{itemize}
-        \item \textbf{Data Plane (AWS S3):} Stores the actual physical files (Parquet and CSV). S3 provides durability and scalable object storage for the Bronze, Silver, and Gold layers.
-        \item \textbf{Control Plane (Neon Postgres):} A serverless PostgreSQL instance acts as the centralized catalog and metadata store. It manages table definitions, schemas, and transaction locking, enabling safe concurrent writes to S3 from multiple Airflow workers.
-    \end{itemize}
-    \item \textbf{Orchestration (Apache Airflow \cite{airflow}):} Manages the end-to-end lifecycle of data pipelines. Airflow allows for the definition of Directed Acyclic Graphs (DAGs) to handle complex task dependencies, backfilling strategies for historical data, and granular retries in case of network or source failures.
+    \item \textbf{Lakehouse Management (DuckLake \cite{ducklake}):} A transaction manager that enables ACID properties and snapshot isolation over object storage, ensuring data consistency during concurrent operations.
+
+    \item \textbf{Cloud Storage \& Catalog (Neon + S3):} A decoupled storage design where \textbf{AWS S3} holds the physical data files (Parquet/CSV) and \textbf{Neon} (Serverless Postgres) acts as the centralized metadata catalog and locking mechanism.
+
+    \item \textbf{Orchestration (Apache Airflow \cite{airflow}):} Manages the end-to-end data lifecycle via Directed Acyclic Graphs (DAGs), handling complex dependencies, scheduling, and automated retries.
 \end{itemize}
 
 \subsection{Data Layering Strategy}
@@ -284,12 +287,8 @@ To manage the dependencies between the Bronze, Silver, and Gold layers efficient
 \subsection{Infrastructure \& Dimensions (DAG 1)}
 The foundational pipeline, \texttt{infrastructure\_and\_dimensions}, is responsible for establishing the Lakehouse schema and ingesting low-velocity reference data. Unlike the daily mobility processing, this DAG is designed to be executed on-demand or annually, as zoning definitions and census statistics change infrequently.
 
-The workflow is architected into three distinct logical phases to maximize parallelism while ensuring referential integrity.
-
-\subsubsection{Phase 1: Infrastructure Initialization}
 Before data movement begins, the pipeline ensures the environment is consistent. The task called \texttt{create\_schemas} connects to the Neon catalog to verify the existence of the logical namespaces (\textit{bronze, silver, gold}). Simultaneously, the \texttt{create\_stats\_table} task initializes the \texttt{data\_quality\_log} table in the Silver layer, which is a prerequisite for audit logging in all subsequent pipelines.
 
-\subsubsection{Phase 2: Parallel Bronze Ingestion}
 To optimize total execution time, all external data extraction tasks are configured to run in parallel. These tasks use the Airflow \textit{@task} notation arguments to specify 3 retries with a gap of 1 minute in case they fail. This phase handles heterogenous data formats through specialized ingestion logic:
 
 \begin{itemize}
@@ -298,8 +297,7 @@ To optimize total execution time, all external data extraction tasks are configu
     \item \textbf{Dictionaries:} Tasks for zoning and mapping ingest standard CSVs via DuckDB's \texttt{read\_csv\_auto}, adding audit columns (\texttt{source\_url}, \texttt{ingestion\_timestamp}) on the fly.
 \end{itemize}
 
-\subsubsection{Phase 3: Silver Transformation and Convergence}
-The dependency structure in the Silver layer follows a "Funnel" pattern (Figure \ref{fig:dag1_flow}). The system enforces a hard dependency on the creation of the master dimension table before populating satellite metric tables.
+The dependency structure in the Silver layer follows a \textit{Funnel} pattern (Figure \ref{fig:dag1_flow}). The system enforces a hard dependency on the creation of the master dimension table before populating satellite metric tables.
 
 \begin{enumerate}
     \item \textbf{Convergence Point (\texttt{dim\_zones}):} This task acts as the synchronization barrier. It waits for the completion of three specific Bronze tasks—Geometry, Zoning names, and INE Mapping. Once available, it performs a 3-way join to construct the master \texttt{dim\_zones} table, generating the surrogate \texttt{zone\_id}.
@@ -310,7 +308,7 @@ The dependency structure in the Silver layer follows a "Funnel" pattern (Figure 
     \centering
     % Placeholder for the Graph View screenshot of DAG 1
     \includegraphics[width=1\textwidth]{imgs/infrastructure_and_dimensions-DAG}
-    \caption{Dependency graph of the Infrastructure DAG. Note the convergence of spatial and dictionary data into \texttt{dim\_zones} before metric processing.}
+    \caption{Dependency graph of the Infrastructure DAG.}
     \label{fig:dag1_flow}
 \end{figure}
 
@@ -319,12 +317,10 @@ The dependency structure in the Silver layer follows a "Funnel" pattern (Figure 
 \subsection{Mobility Ingestion (DAG 2)}
 The second pipeline, \texttt{mobility\_ingestion}, constitutes the core factory of the Lakehouse. It is responsible for the daily ingestion and transformation of the high-volume Origin-Destination matrices. Given that the source data is partitioned by day (one compressed CSV per day), this DAG utilizes Airflow's Dynamic Task Mapping to scale horizontally, processing date ranges supplied via run-time parameters.
 
-\subsubsection{Phase 1: Dynamic Scheduling and Initialization}
 Unlike the static infrastructure DAG, this workflow begins by generating a execution plan based on user input. The \texttt{generate\_date\_list} task parses the \texttt{start\_date} and \texttt{end\_date} parameters to produce a list of strings (e.g., \texttt{['20230101', '20230102', ...]}).
 
 Simultaneously, the pipeline executes idempotent initialization tasks (\texttt{ensure\_br\_mobility...} and \texttt{ensure\_sl\_mobility...}). These tasks utilize \texttt{CREATE TABLE IF NOT EXISTS} logic to prepare the partitioning structures in the Bronze and Silver layers, ensuring that parallel workers do not encounter race conditions when attempting to write to non-existent tables.
 
-\subsubsection{Phase 2: Resilient Bronze Ingestion}
 The \texttt{br\_process\_single\_day} task is mapped over the generated date list. Each instance handles a specific day, implementing robust checks to handle the known inconsistencies in the MITMA source server:
 
 \begin{itemize}
@@ -333,7 +329,6 @@ The \texttt{br\_process\_single\_day} task is mapped over the generated date lis
     \item \textbf{Streaming Ingestion:} Valid files are streamed directly from the remote server into the \texttt{mobility\_data} table using DuckDB's \texttt{read\_csv\_auto}, bypassing local disk storage.
 \end{itemize}
 
-\subsubsection{Phase 3: Silver Transformation}
 The transformation phase (\texttt{sl\_process\_single\_day}) mirrors the mapping of the ingestion phase but introduces a strict cross-layer dependency: Silver processing for the batch only begins once Bronze ingestion is confirmed.
 
 Inside this task, raw text data is transformed into the analytical schema. This involves joining the raw mobility records with the \texttt{dim\_zones} table (created in DAG 1) to resolve MITMA/INE codes into internal surrogate keys. This effectively acts as a foreign key validation constraint; records with invalid zone codes are implicitly filtered during the inner join, ensuring referential integrity in the Silver layer.
@@ -342,7 +337,7 @@ Inside this task, raw text data is transformed into the analytical schema. This 
     \centering
     % Placeholder for the Graph View screenshot of DAG 2
     \includegraphics[width=1\textwidth]{imgs/mobility_ingestion-DAG}
-    \caption{The Mobility Ingestion DAG utilizing Dynamic Task Mapping. The central block expands into $N$ parallel tasks corresponding to the number of days in the requested date range.}
+    \caption{The Mobility Ingestion DAG utilizing Dynamic Task Mapping.}
     \label{fig:dag2_flow}
 \end{figure}
 
@@ -382,10 +377,8 @@ The analytical layer is materialized through three dedicated Airflow pipelines. 
 
 
 \section{Results and Use Cases}
-% [GUIDE]: This corresponds to Page 4 and the "Results" requirement on Page 6.
 
 \subsection{Use Case 1: Typical Mobility Patterns}
-% [GUIDE]: Explain the Clustering (K-Means) approach.
 To characterize the ``typical day'', we aggregated hourly flows and applied K-Means clustering...
 
 \begin{figure}[H]
@@ -460,13 +453,36 @@ The results are materialized in a Kepler.gl dashboard combining two visual layer
 \end{itemize}
 
 \section{Discussion}
-% [GUIDE]: Discuss the value. How does this help the "Transport Expert"?
-The implemented lakehouse allows experts to query billions of rows using standard SQL without managing infrastructure...
+The implementation of this 3-tier Data Lakehouse represents a significant advancement over traditional file-based workflows for mobility analysis. By transitioning from ad-hoc processing of CSV files to a structured Lakehouse architecture, the system achieves three critical operational goals:
+
+\begin{itemize}
+    \item \textbf{Democratization of Big Data:} The architecture successfully decouples the complex data engineering lifecycle (ELT) from the analytical consumption. Transport experts, who previously required specialized programming skills to parse terabytes of daily CSVs, can now access the Gold layer using standard SQL queries or BI tools. The pre-computation of metrics like the \textit{gravity score} or \textit{functional labels} reduces the time-to-insight from days to seconds.
+    
+    \item \textbf{Cost-Effective Scalability:} The separation of storage (S3) and compute (DuckDB) allows the infrastructure to handle years of historical data with minimal overhead. Unlike coupled Data Warehouses, where costs accrue 24/7, this architecture only incurs compute costs during active transformation or querying. The use of ephemeral AWS Batch instances demonstrates that high-performance analytics can be achieved on a limited budget.
+    
+    \item \textbf{Contextual Enrichment:} The true value of the system lies in the integration achieved in the Silver layer. By enriching raw mobility flows with socio-economic context (INE data) and spatial distances, the system transforms raw trip counts into actionable accessibility metrics. This was demonstrated in Use Case 2, where the combination of population, rent, and distance revealed infrastructure gaps that raw mobility matrices alone could not identify.
+\end{itemize}
+
 
 \section{Conclusions and Limitations}
-% [GUIDE]: Summarize success. Mention limitations (e.g., data quality issues in Oct/Nov 2023 mentioned in PDF Page 2).
-The project successfully established a scalable 3-tier architecture. However, limitations exist regarding data anomalies in late 2023...
 
+\subsection{Conclusions}
+This project successfully designed and deployed a robust Data Lakehouse capable of ingesting, cleaning, and analyzing Spanish mobility data at scale. The 3-tier architecture ensures data governance, with a raw Bronze layer for auditability, a refined Silver layer for integration, and a business-ready Gold layer.
+
+The implementation of the three use cases demonstrates the system's versatility: from identifying temporal patterns via Unsupervised Learning (Clustering) to solving domain-specific physics problems (Gravity Models) and geospatial classification. By leveraging DuckDB and DuckLake, the solution proves that ACID-compliant, high-performance analytics are achievable using open-source tools without the need for expensive enterprise licenses.
+
+\subsection{Limitations}
+Despite the success of the architecture, several limitations were identified during implementation, concerning both data quality and infrastructure constraints:
+
+\begin{itemize}
+    \item \textbf{Source Data Anomalies:} As noted in the MITMA technical documentation, the source datasets contain significant gaps during October and November 2023 due to mobile network incidents. While our pipeline's robust ingestion logic prevents these missing files from crashing the system, the resulting analytics for Q4 2023 require statistical imputation to be fully representative.
+    
+    \item \textbf{Infrastructure Constraints (Neon Catalog):} A critical bottleneck was observed regarding the metadata catalog management. We utilized the Neon Serverless Postgres Free Tier as the central catalog for DuckLake. It was observed that this tier enforces strict connection lifecycle limits. During the processing of large historical backfills, the catalog would frequently terminate the connection due to timeout limits on idle transactions, even while the compute engine (DuckDB) was actively writing data to S3. This necessitated the fragmentation of batch loads into smaller temporal windows to ensure transaction commit stability.
+    
+    \item \textbf{Vertical Scaling vs. Horizontal Distribution:} A structural limitation of using DuckDB is its single-node architecture. Unlike distributed engines like Apache Spark which scale horizontally (adding more machines to a cluster), DuckDB scales vertically (requiring a larger single machine). While AWS Batch allows us to request high-memory instances (e.g., 64GB or 128GB RAM), there is a theoretical ceiling. If a specific join or aggregation requires more memory than the largest available single EC2 instance, the query would fail or suffer severe performance degradation due to disk spilling.
+    
+    \item \textbf{Latency and Real-Time Analysis:} The current architecture is designed for $T+1$ (Daily) batch processing. Due to the provisioning time of AWS Batch instances and the file-based ingestion nature of the source, this system is not suitable for real-time traffic monitoring. Use cases requiring sub-minute latency (e.g., immediate accident detection or live congestion management) would require a Streaming architecture (e.g., Kafka + Flink) rather than the current Lakehouse approach.
+\end{itemize}
 \newpage
 % --- BIBLIOGRAPHY ---
 \begin{thebibliography}{9}
