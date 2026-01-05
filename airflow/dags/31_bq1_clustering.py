@@ -10,6 +10,10 @@ import logging
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+import seaborn as sns
+import plotly.graph_objects as go
+import numpy as np
 
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
 
@@ -26,6 +30,7 @@ S3_KEY_PREFIX = "results/bq1/"
     params={
         "start_date": Param("20230101", type="string", description="YYYYMMDD"),
         "end_date": Param("20230101", type="string", description="YYYYMMDD"),
+        "target_hour": Param(8, type="integer", minimum=0, maximum=23, title="Heatmap Hour"),
         "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)"),
         "input_crs": Param(
             "EPSG:25830", 
@@ -55,15 +60,16 @@ def gold_analytics():
             con.execute(f"""
             CREATE OR REPLACE TABLE lakehouse.silver.tmp_gold_profiles_agg AS
             WITH municipios_in_polygon AS (
-                SELECT zone_id 
+                SELECT zone_id, zone_name 
                 FROM lakehouse.silver.dim_zones
-                -- Usamos Jinja para el polígono y el CRS si fuera necesario
                 WHERE ST_Intersects(ST_GeomFromText('{polygon_wkt}'), polygon)
             ),
             filtered_trips AS (
-                -- Seleccionamos viajes que nacen O mueren en el polígono
+                -- Seleccionamos viajes que empiezan o acaban en el polígono
                 SELECT 
                     partition_date, 
+                    origin_zone_id, 
+                    destination_zone_id,
                     hour(period) as hour, 
                     trips
                 FROM lakehouse.silver.fact_mobility f
@@ -75,13 +81,16 @@ def gold_analytics():
                     f.destination_zone_id IN (SELECT zone_id FROM municipios_in_polygon)
                 )
             )
-            -- Agrupamos todo al final una sola vez
             SELECT 
-                partition_date, 
-                hour, 
-                SUM(trips) as total_trips
-            FROM filtered_trips
-            GROUP BY 1, 2;
+                t.partition_date, 
+                t.hour, 
+                zo.zone_name as origin_name,      -- Nombre del origen
+                zd.zone_name as destination_name, -- Nombre del destino
+                SUM(t.trips) as total_trips
+            FROM filtered_trips t
+            JOIN lakehouse.silver.dim_zones zo ON t.origin_zone_id = zo.zone_id
+            JOIN lakehouse.silver.dim_zones zd ON t.destination_zone_id = zd.zone_id
+            GROUP BY 1, 2, 3, 4;
             """)
 
             logging.info("✅ Temporary aggregated profiles table created: lakehouse.silver.tmp_gold_profiles_agg")
@@ -95,79 +104,99 @@ def gold_analytics():
 
     @task
     def process_gold_patterns_locally():
-        # Step A: Fetch data from the table Batch just created
+        from sklearn.cluster import KMeans
+        import pandas as pd
+        
         with get_connection() as con:
+            # df_raw tiene: [partition_date, hour, origin_zone_id, destination_zone_id, total_trips]
             df_raw = con.execute("SELECT * FROM lakehouse.silver.tmp_gold_profiles_agg").df()
         
         if df_raw.empty:
-            logging.warning("No data found in tmp_gold_profiles_agg")
             return
 
-        # Step B: Run K-Means
-        df_pivot = df_raw.pivot(index='partition_date', columns='hour', values='total_trips').fillna(0)
+        # Sumamos los viajes por día y hora (ignorando origen/destino)
+        df_temporal = df_raw.groupby(['partition_date', 'hour'])['total_trips'].sum().reset_index()
+        
+        # Pivotamos para que cada fila sea un día y cada columna una de las 24 horas
+        df_pivot = df_temporal.pivot(index='partition_date', columns='hour', values='total_trips').fillna(0)
+        
+        # Normalizamos
         norm_data = df_pivot.div(df_pivot.sum(axis=1).replace(0, 1), axis=0)
+        
+        # Entrenamos el K-Means
         kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto').fit(norm_data)
-        
-        df_clusters = pd.DataFrame({'partition_date': df_pivot.index, 'cluster_id': kmeans.labels_})
-        df_final = df_raw.merge(df_clusters, on='partition_date')
-        
-        gold_table = df_final.groupby(['cluster_id', 'hour'])['total_trips'].mean().reset_index()
-        gold_table.columns = ['cluster_id', 'hour', 'avg_trips']
-        gold_table['processed_at'] = pd.Timestamp.now()
+        df_labels = pd.DataFrame({'partition_date': df_pivot.index, 'cluster_id': kmeans.labels_})
 
-        # Step C: Save to Gold
+        # Unimos las etiquetas del clustering con los datos temporales
+        df_gen = df_temporal.merge(df_labels, on='partition_date')
+        gold_general_patterns = df_gen.groupby(['cluster_id', 'hour'])['total_trips'].mean().reset_index()
+
+        # Unimos las etiquetas con los datos originales (que tienen origen/destino)
+        df_geo = df_raw.merge(df_labels, on='partition_date')
+
+        # Agrupamos por clúster, hora, origen y destino para obtener la matriz OD típica
+        gold_od_matrix = df_geo.groupby(['cluster_id', 'hour', 'origin_name', 'destination_name'])['total_trips'].mean().reset_index()
+        gold_od_matrix.columns = ['cluster_id', 'hour', 'origin', 'destination', 'trips']
+
+        # Guardamos los resultados en Gold
         with get_connection() as con:
-            con.register('tmp_gold_patterns', gold_table)
-            con.execute("""
-                CREATE OR REPLACE TABLE lakehouse.gold.typical_day_patterns AS
-                SELECT cluster_id::INT as cluster_id, hour::INT as hour, 
-                       avg_trips::DOUBLE as avg_trips, processed_at::TIMESTAMP as processed_at
-                FROM tmp_gold_patterns;
-            """)
-            con.register('tmp_assignments', df_clusters)
-            con.execute("""
-                CREATE OR REPLACE TABLE lakehouse.gold.dim_cluster_assignments AS 
-                SELECT partition_date, cluster_id FROM tmp_assignments;
-            """)
+            # Para el plot de líneas (General)
+            con.register('tmp_patterns', gold_general_patterns)
+            con.execute("CREATE OR REPLACE TABLE lakehouse.gold.typical_day_patterns AS SELECT * FROM tmp_patterns")
+            
+            # Para los heatmaps (Geográfico)
+            con.register('tmp_od', gold_od_matrix)
+            con.execute("CREATE OR REPLACE TABLE lakehouse.gold.typical_od_matrices AS SELECT * FROM tmp_od")
 
-    # @task
-    # def plot_heatmaps_to_s3(**context):
-    #     import seaborn as sns
-    #     con = get_connection()
-    #     df = con.execute("SELECT * FROM lakehouse.gold.typical_od_matrices").df()
+    @task
+    def plot_heatmaps_to_s3(**context):
+        target_hour = context['params']['target_hour']
+
+        with get_connection() as con:
+            df = con.execute("SELECT * FROM lakehouse.gold.typical_od_matrices").df()
         
-    #     s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+        if df.empty: return
 
-    #     for cluster_id in df['cluster_id'].unique():
-    #         # Filtramos datos del cluster
-    #         cluster_data = df[df['cluster_id'] == cluster_id]
-            
-    #         # Pivotamos para formato Matriz (Filas=Origen, Columnas=Destino)
-    #         matrix = cluster_data.pivot(index='origin', columns='destination', values='trips').fillna(0)
-            
-    #         # Dibujamos el Heatmap
-    #         plt.figure(figsize=(10, 8))
-    #         sns.heatmap(matrix, annot=True, cmap="YlGnBu", fmt='.1f')
-    #         plt.title(f"Matriz de Origen-Destino - Patrón (Cluster) {cluster_id}")
-    #         plt.xlabel("Destino")
-    #         plt.ylabel("Origen")
-    #         plt.tight_layout()
+        s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
 
-    #         # Guardar y subir
-    #         img_buffer = io.BytesIO()
-    #         plt.savefig(img_buffer, format='png')
-    #         img_buffer.seek(0)
+        df_hour = df[df['hour'] == target_hour]
+
+        for cluster_id in df_hour['cluster_id'].unique():
+            cluster_data = df_hour[df_hour['cluster_id'] == cluster_id]
+
+            # --- Selección de Top Zonas  ---
+            top_zones = cluster_data.groupby('origin')['trips'].sum().nlargest(10).index
+            cluster_data = cluster_data[
+                cluster_data['origin'].isin(top_zones) & 
+                cluster_data['destination'].isin(top_zones)
+            ]
             
-    #         file_key = f"{S3_KEY_PREFIX}heatmap_cluster_{cluster_id}.png"
-    #         s3_hook.load_file_obj(img_buffer, key=file_key, bucket_name=S3_BUCKET, replace=True)
-    #         plt.close()
-    #         logging.info(f"✅ Heatmap cluster {cluster_id} subido a S3.")
+            matrix = cluster_data.pivot(index='origin', columns='destination', values='trips').fillna(0)
+            
+            plt.figure(figsize=(12, 10))
+            
+            sns.heatmap(
+                matrix, 
+                annot=False, 
+                cmap="YlGnBu", 
+                norm=LogNorm() 
+            )
+
+            plt.title(f"Matriz OD (Top Zonas) - Cluster {cluster_id} a las {target_hour:02d}:00h\n(Log Scale)")
+
+            img_buffer = io.BytesIO()
+            plt.savefig(img_buffer, format='png', dpi=150)
+            img_buffer.seek(0)
+            
+            file_key = f"{S3_KEY_PREFIX}heatmap_cluster_{cluster_id}_h{target_hour}.png"
+            s3_hook.load_file_obj(img_buffer, key=file_key, bucket_name=S3_BUCKET, replace=True)
+            plt.close()
 
     @task
     def cleanup():
         with get_connection() as con:            
             con.execute("DROP TABLE IF EXISTS silver.tmp_gold_profiles_agg;")
-            con.execute("DROP TABLE IF EXISTS gold.dim_cluster_assignments;")
+            con.execute("DROP TABLE IF EXISTS gold.typical_od_matrices;")
 
     @task
     def plot_to_s3(**context):
@@ -187,7 +216,7 @@ def gold_analytics():
             SELECT 
                 hour, 
                 'Cluster ' || CAST(cluster_id AS VARCHAR) as pattern_name, 
-                avg_trips
+                total_trips
             FROM lakehouse.gold.typical_day_patterns
             ORDER BY hour, cluster_id;
             """
@@ -200,7 +229,7 @@ def gold_analytics():
                 return
 
             # 3. Pivot and Plot
-            pivot_df = df.pivot(index='hour', columns='pattern_name', values='avg_trips')
+            pivot_df = df.pivot(index='hour', columns='pattern_name', values='total_trips')
             
             logging.info(f"Generating plot for: {start_dt} to {end_dt}")
             fig, ax = plt.subplots(figsize=(12, 7))
@@ -209,7 +238,7 @@ def gold_analytics():
             
             ax.set_title(f'Typical Daily Mobility Patterns\nPeriod: {start_dt} - {end_dt}', fontsize=15)
             ax.set_xlabel('Hour of Day', fontsize=12)
-            ax.set_ylabel('Average Trips', fontsize=12)
+            ax.set_ylabel('Total Trips', fontsize=12)
             
             ax.set_xticks(range(0, 24))
             ax.set_xticklabels([f'{h:02d}:00' for h in range(24)], rotation=45)
@@ -246,6 +275,9 @@ def gold_analytics():
             con.close()
 
     # --- ORCHESTRATION ---
-    prepare_profiles_locally() >> process_gold_patterns_locally() >> cleanup() >> plot_to_s3()
+    prep = prepare_profiles_locally()
+    proc = process_gold_patterns_locally()
+    
+    prep >> proc >> [plot_heatmaps_to_s3(), plot_to_s3()] >> cleanup()
 
 gold_analytics()
