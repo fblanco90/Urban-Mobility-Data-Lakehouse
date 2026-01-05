@@ -44,63 +44,46 @@ S3_KEY_PREFIX = "results/bq1/"
 
 def gold_analytics():
 
-    @task
-    def prepare_profiles_locally(**context):
-        params = context['params']
-        polygon_wkt = params['polygon_wkt']
+    sql_profiles = """
+    CREATE OR REPLACE TABLE silver.tmp_gold_profiles_agg AS
+    WITH municipios_in_polygon AS (
+        SELECT zone_id, zone_name 
+        FROM silver.dim_zones
+        WHERE ST_Intersects(ST_GeomFromText('{{ params.polygon_wkt }}'), polygon)
+    ),
+    filtered_trips AS (
+        SELECT 
+            partition_date, 
+            origin_zone_id, 
+            destination_zone_id,
+            hour(period) as hour, 
+            trips
+        FROM silver.fact_mobility f
+        WHERE f.partition_date BETWEEN strptime('{{ params.start_date }}', '%Y%m%d')::DATE 
+                             AND strptime('{{ params.end_date }}', '%Y%m%d')::DATE
+        AND (
+            f.origin_zone_id IN (SELECT zone_id FROM municipios_in_polygon)
+            OR 
+            f.destination_zone_id IN (SELECT zone_id FROM municipios_in_polygon)
+        )
+    )
+    SELECT 
+        t.partition_date, 
+        t.hour, 
+        zo.zone_name as origin_name,
+        zd.zone_name as destination_name,
+        SUM(t.trips) as total_trips
+    FROM filtered_trips t
+    JOIN silver.dim_zones zo ON t.origin_zone_id = zo.zone_id
+    JOIN silver.dim_zones zd ON t.destination_zone_id = zd.zone_id
+    GROUP BY 1, 2, 3, 4;
+    """
 
-        sd_raw = str(params['start_date']) # "20230101"
-        ed_raw = str(params['end_date'])   # "20231231"
-
-        # Transformamos a formato YYYY-MM-DD (añadiendo los guiones)
-        start_date = f"{sd_raw[:4]}-{sd_raw[4:6]}-{sd_raw[6:]}"
-        end_date = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
-
-        with get_connection() as con:
-            con.execute(f"""
-            CREATE OR REPLACE TABLE lakehouse.silver.tmp_gold_profiles_agg AS
-            WITH municipios_in_polygon AS (
-                SELECT zone_id, zone_name 
-                FROM lakehouse.silver.dim_zones
-                WHERE ST_Intersects(ST_GeomFromText('{polygon_wkt}'), polygon)
-            ),
-            filtered_trips AS (
-                -- Seleccionamos viajes que empiezan o acaban en el polígono
-                SELECT 
-                    partition_date, 
-                    origin_zone_id, 
-                    destination_zone_id,
-                    hour(period) as hour, 
-                    trips
-                FROM lakehouse.silver.fact_mobility f
-                WHERE f.partition_date >= '{start_date}' 
-                    AND f.partition_date <= '{end_date}'
-                AND (
-                    f.origin_zone_id IN (SELECT zone_id FROM municipios_in_polygon)
-                    OR 
-                    f.destination_zone_id IN (SELECT zone_id FROM municipios_in_polygon)
-                )
-            )
-            SELECT 
-                t.partition_date, 
-                t.hour, 
-                zo.zone_name as origin_name,      -- Nombre del origen
-                zd.zone_name as destination_name, -- Nombre del destino
-                SUM(t.trips) as total_trips
-            FROM filtered_trips t
-            JOIN lakehouse.silver.dim_zones zo ON t.origin_zone_id = zo.zone_id
-            JOIN lakehouse.silver.dim_zones zd ON t.destination_zone_id = zd.zone_id
-            GROUP BY 1, 2, 3, 4;
-            """)
-
-            logging.info("✅ Temporary aggregated profiles table created: lakehouse.silver.tmp_gold_profiles_agg")
-
-    # task_batch_profiles = run_batch_sql(
-    #     task_id="batch_prepare_profiles", 
-    #     sql_query=sql_profiles, 
-    #     memory="12GB"
-    # )
-
+    task_batch_profiles = run_batch_sql(
+        task_id="batch_prepare_profiles", 
+        sql_query=sql_profiles, 
+        memory="12GB"
+    )
 
     @task
     def process_gold_patterns_locally():
@@ -371,10 +354,74 @@ def gold_analytics():
         finally:
             con.close()
 
+    @task
+    def generate_report_markdown(**context):
+        """
+        Generates a Markdown report in S3 summarizing BQ1 results.
+        Uses the underlying boto3 client to avoid 'mimetype' keyword errors.
+        """
+        params = context['params']
+        start_dt = params['start_date']
+        end_dt = params['end_date']
+        target_h = params['target_hour']
+        
+        # Define filenames
+        png_filename = f"mobility_report_{start_dt}_{end_dt}.png"
+        html_filename = f"interactive_heatmap_h{target_h}.html"
+        md_filename = f"report_BQ1_{start_dt}.md"
+        
+        # S3 Public URL (or internal reference)
+        s3_base_url = f"https://{S3_BUCKET}.s3.eu-central-1.amazonaws.com/{S3_KEY_PREFIX}"
+
+        # Mejoramos el espaciado con saltos de línea extra (\n) para asegurar el renderizado
+        markdown_content = f"""# Business Question 1: Typical Mobility Patterns (2023)
+
+## 1. Execution Summary
+This report analyzes mobility patterns in Spain using MITMA and INE public data.
+
+* **Analysis Period:** {start_dt} to {end_dt}
+* **Target Hour:** {target_h}:00h
+* **Spatial Filter:** `{params['polygon_wkt']}`
+
+---
+
+## 2. Mobility Pattern Visualization
+The **Gold layer** identified daily profiles via K-Means clustering.
+
+![Mobility Patterns Plot]({s3_base_url}{png_filename})
+
+*Figure 1: Mean hourly trips per cluster for the reference period.*
+
+        ---
+
+## 3. Interactive Origin-Destination Analysis
+Access the interactive tool for zone-to-zone flows here:
+
+👉 [**Open Interactive OD Matrix (HTML)**]({s3_base_url}{html_filename})
+
+---
+## 4. Technical Infrastructure
+* **Tiers:** 3-tier Lakehouse (Bronze, Silver, Gold).
+* **Engine:** DuckDB for SQL-based analytics.
+* **Storage:** DuckLake for ACID storage.
+"""
+
+        s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+        s3_client = s3_hook.get_conn()
+                
+        s3_client.put_object(
+            Body=markdown_content,
+            Bucket=S3_BUCKET,
+            Key=f"{S3_KEY_PREFIX}{md_filename}",
+            ContentType='text/markdown'
+        )
+                
+        logging.info("✅ Markdown report successfully uploaded with public access.")
+
     # --- ORCHESTRATION ---
-    prep = prepare_profiles_locally()
     proc = process_gold_patterns_locally()
+    t_md = generate_report_markdown()
     
-    prep >> proc >> [plot_interactive_heatmap_html(), plot_to_s3()] >> cleanup()
+    task_batch_profiles >> proc >> [plot_interactive_heatmap_html(), plot_to_s3()] >> t_md >> cleanup()
 
 gold_analytics()
