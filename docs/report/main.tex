@@ -14,6 +14,9 @@
 \usepackage{float}        % For figure placement
 \usepackage{titlesec}     % Custom section titles
 \usepackage{parskip}      % Space between paragraphs
+\usepackage{amsmath}
+\usepackage{pdflscape}
+
 
 % --- CODE SNIPPET STYLING ---
 \definecolor{codegreen}{rgb}{0,0.6,0}
@@ -45,7 +48,7 @@
 \title{\textbf{Building a Scalable 3-Tier Data Lakehouse for Mobility Analysis in Spain}\\ Big Data Engineering Project \\}
 \author{
     \textbf{Joan Sánchez Verdú} \and \textbf{María López Hernández} \and \textbf{Fernando Blanco Membrives} \\    
-    \textit{Link to Code Repository:}\\ \textit{\url{https://github.com/joanstudyai-code/MUCEIM-BDET-Project.git}}
+    % \textit{Link to Code Repository:}\\ \textit{\url{https://github.com/joanstudyai-code/MUCEIM-BDET-Project.git}}
 }
 \date{\today}
 
@@ -61,10 +64,7 @@
 % --- SECTIONS ---
 
 \section{Introduction}
-% [GUIDE]: Introduce the context. 
-% - Mention the importance of big data in transport planning.
-% - State the Project Overview (from Page 1): Creating infrastructure for transport experts.
-% - Mention the tools: DuckDB, DuckLake, Airflow.
+
 Mobility analysis is critical for modern urban planning...
 
 \subsection{Objectives}
@@ -149,14 +149,15 @@ In this implementation (Figure \ref{fig:bronze_layer_diagram}), a distinct table
 
 Additionally, the ingestion process is configured to ignore malformed records, ensuring that isolated errors do not halt the entire pipeline. To enhance data governance and auditability, metadata columns are appended to every record, including \texttt{ingestion\_timestamp} and \texttt{source\_url}. Finally, to optimize storage and performance, the high-volume mobility data is physically partitioned by date (\texttt{fecha}), enabling efficient batch processing.
 
-\begin{figure}[H]
+\begin{landscape}
+\begin{figure}[p]
     \centering
-    \includegraphics[width=1\textwidth]{imgs/Bronze_Schema_diagramS3}
+    \includegraphics[width=1.5\textwidth]{imgs/Bronze_Schema_diagramS4}
     
     \caption{Entity Diagram of the Bronze Layer. One table for each file.}
     \label{fig:bronze_layer_diagram}
 \end{figure}
-
+\end{landscape}
 
 \subsubsection{Silver Layer (Cleaned \& Integrated)}
 The Silver layer represents the refined, enterprise-wide view of the data. In this stage, data undergoes validation, cleaning, standardization, and enrichment processes to transform raw inputs into structured, trustworthy tables. The schema design (Figure \ref{fig:silver_layer_diagram}) follows a Star Schema approach, establishing a central fact table for mobility flows linked to surrounding dimension tables for spatial and socio-economic context. All tables include a \texttt{TIMESTAMP WITH TIME ZONE} column \texttt{processed\_at} for auditability.
@@ -166,6 +167,14 @@ The foundation of the Silver layer is the creation of a unified spatial dimensio
 \begin{itemize}
     \item \textbf{Spatial Integration:} The \texttt{dim\_zones} table leverages the native \texttt{GEOMETRY} objects already parsed in the Bronze layer. By joining the municipal geometries with the MITMA-INE crosswalk (\texttt{mapping\_ine\_mitma}), the Silver layer establishes a clean, spatially-enabled dimension.
     \item \textbf{Surrogate Keys:} A unique integer identifier (\texttt{zone\_id}) is generated for each municipality. This decouples downstream analytics from changes in external string codes (MITMA/INE IDs) and improves join performance.
+\end{itemize}
+
+
+\paragraph{Spatial Connectivity (Distance Matrix)\\}
+To support spatial network analysis and distance-based filtering, a derivative dimension table, \texttt{dim\_zone\_distances}, is established. This table functions as a pre-computed distance matrix representing the relationships between municipality pairs. By calculating the distance between the centroids of the geometries stored in \texttt{dim\_zones}, the system avoids computationally expensive geospatial operations during query time.
+\begin{itemize}
+    \item \textbf{Zone Linkage:} The table maps relationships using \texttt{origin\_zone\_id} and \texttt{destination\_zone\_id}, which act as foreign keys referencing the central \texttt{dim\_zones} table.
+    \item \textbf{Metric Storage:} The \texttt{dist\_km} column stores the distance in kilometers as a \texttt{DOUBLE} precision value, allowing for precise downstream analysis of trip lengths and gravity models.
 \end{itemize}
 
 
@@ -202,14 +211,46 @@ The schema is designed to be generic enough to store heterogeneous metrics:
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=1\textwidth]{imgs/Silver_Schema_diagramS3}
+    \includegraphics[width=0.75\textwidth]{imgs/Silver_Schema_diagramS4}
     
     \caption{Entity-Relationship Diagram (ERD) of the Silver Layer. The schema follows a Star Schema design, centering on the \texttt{fact\_mobility} table linked to spatial (\texttt{dim\_zones}) and temporal dimensions.}
     \label{fig:silver_layer_diagram}
 \end{figure}
 
 \subsubsection{Gold Layer (Mart)}
-[TODO]
+The Gold layer constitutes the ``Data Mart'' of the lakehouse architecture. While the Silver layer focuses on data integrity and normalization, the Gold layer is organized around specific business problems. Tables in this layer are denormalized, pre-aggregated, and enriched with derived metrics to ensure low-latency performance for Business Intelligence (BI) tools and final reporting.
+
+As illustrated in Figure \ref{fig:gold_layer_diagram}, the schema consists of three distinct analytical tables, each corresponding to a specific use case:
+
+\begin{itemize}
+    \item \textbf{\texttt{gold\_typical\_day\_patterns}:} 
+    This table supports temporal analysis (Use Case 1). It reduces billions of raw trip records into a lightweight set of hourly profiles.
+    \begin{itemize}
+        \item \textbf{Aggregation:} Data is grouped by \texttt{cluster\_id} (representing patterns like ``Weekday'' or ``Holiday'') and \texttt{hour}.
+        \item \textbf{Metrics:} It stores the \texttt{avg\_trips} to allow for immediate plotting of demand curves without recalculating the underlying raw data.
+    \end{itemize}
+
+    \item \textbf{\texttt{gold\_infrastructure\_gaps}:} 
+    Designed for the Gravity Model analysis (Use Case 2), this table stores Origin-Destination (OD) pairs. Unlike standard OD matrices, this table is enriched with socio-economic context.
+    \begin{itemize}
+        \item \textbf{Contextual Data:} Includes \texttt{total\_population} (Origin) and \texttt{rent} (Destination proxy for economic attraction) alongside the spatial impedance \texttt{dist\_km}.
+        \item \textbf{Key KPI:} The \texttt{mismatch\_ratio} is the critical derivative, quantifying the gap between theoretical potential and actual observed trips.
+    \end{itemize}
+
+    \item \textbf{\texttt{gold\_zone\_functional\_classification}:} 
+    This table provides a semantic layer for the spatial zones (Use Case 3). Instead of raw ID numbers, it assigns functional roles to municipalities.
+    \begin{itemize}
+        \item \textbf{Flow Ratios:} It persists calculated indices such as \texttt{net\_flow\_ratio} (balance of trade in trips) and \texttt{retention\_rate} (local self-sufficiency).
+        \item \textbf{Categorization:} The \texttt{functional\_label} column stores the final human-readable classification (e.g., ``Bedroom Community''), simplifying downstream map visualizations.
+    \end{itemize}
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{imgs/Gold_Schema_diagramS4} 
+    \caption{Schema design of the Gold Layer. These tables represent the final analytical products, denormalized and enriched with calculated metrics (e.g., mismatch ratios, functional labels) ready for visualization.}
+    \label{fig:gold_layer_diagram}
+\end{figure}
 
 
 
@@ -232,18 +273,12 @@ This section details the engineering strategies employed to ensure scalable data
 \subsection{Orchestration Strategy}
 To manage the dependencies between the Bronze, Silver, and Gold layers efficiently, the system is architected into a multi-DAG ecosystem. This design allows for independent scaling and maintenance of static dimensions versus high-volume mobility facts.
 
-The workflow is organized into a hierarchical structure controlled by a Master Orchestrator, as described below:
-
 \begin{enumerate} 
     \item \textbf{Infrastructure \& Dimensions DAG:} Handles the ingestion of low-frequency static data (INE demographics, MITMA zoning, Calendars). It establishes the schema foundations and Bronze/Silver dimension tables.
     
     \item \textbf{Mobility Ingestion DAG:} A parameterized worker pipeline designed for high-volume processing. It accepts date ranges to ingest, clean, and transform the daily mobility files (MITMA OD Matrices) from Bronze to Silver using atomic tasks.
     
-    \item \textbf{Gold Generation DAG:} Triggered upon the completion of ingestion, this pipeline aggregates the Silver data to construct the core analytical models (e.g., K-Means Clustering, Gravity Models) in the Gold layer.
-    
-    \item \textbf{Business Reporting DAGs:} A set of independent, on-demand DAGs designed to query the pre-computed Gold layer. These are isolated from the ELT process to allow ``Transport Experts'' to generate specific reports (e.g., specific Polygon filters or time windows) without re-processing the underlying data.
-
-    \item \textbf{Master Orchestrator DAG:} A controller pipeline containing no logic other than the triggering of downstream DAGs. It manages the sequential dependencies between infrastructure setup, data ingestion, and model training, ensuring referential integrity across the Lakehouse.
+    \item \textbf{Gold Generations and consultings DAGs:} These pipelines (DAGs 31–33) consolidate the logic into unified flows. Triggered on-demand with custom parameters (e.g., specific spatial polygons or date ranges), they first materialize the aggregated Gold tables using DuckDB and immediately generate the final visual assets (Kepler.gl maps, Matplotlib charts), uploading them to S3 in a single execution context.
 \end{enumerate}
 
 \subsection{Infrastructure \& Dimensions (DAG 1)}
@@ -268,7 +303,7 @@ The dependency structure in the Silver layer follows a "Funnel" pattern (Figure 
 
 \begin{enumerate}
     \item \textbf{Convergence Point (\texttt{dim\_zones}):} This task acts as the synchronization barrier. It waits for the completion of three specific Bronze tasks—Geometry, Zoning names, and INE Mapping. Once available, it performs a 3-way join to construct the master \texttt{dim\_zones} table, generating the surrogate \texttt{zone\_id}.
-    \item \textbf{Satellite Expansion:} Once the master dimension exists, the downstream tasks called \texttt{metric\_population}, \texttt{metric\_ine\_rent} and \texttt{dim\_zone\_holidays} trigger in parallel. Each task performs a join between its respective raw Bronze source and the newly created \texttt{dim\_zones} to assign the correct surrogate keys to the statistical data.
+    \item \textbf{Satellite Expansion:} Once the master dimension exists, the downstream tasks called \texttt{metric\_population}, \texttt{metric\_ine\_rent}, \texttt{dim\_zone\_distance\_matrix} and \texttt{dim\_zone\_holidays} trigger in parallel. Each task performs a join between its respective raw Bronze source and the newly created \texttt{dim\_zones} to assign the correct surrogate keys to the statistical data.
 \end{enumerate}
 
 \begin{figure}[H]
@@ -312,15 +347,32 @@ Inside this task, raw text data is transformed into the analytical schema. This 
 \end{figure}
 
 
-\subsection{Gold Generation (DAG 3)}
-[TODO]
+\subsection{Gold Generations and consultings (DAGs 3)}
+The analytical layer is materialized through three dedicated Airflow pipelines. Each DAG is designed to answer a specific business question by transforming Silver data into aggregated Gold tables and subsequently generating visual reports stored in S3.
 
-\subsection{Bussines Reporting (DAG 4-5-6)}
-[TODO]
+\begin{itemize}
+    \item \textbf{DAG 31: Typical Day Clustering (\texttt{31\_bq1\_clustering})} \\
+    This pipeline addresses the characterization of mobility patterns.
+    \begin{itemize}
+        \item \textbf{Transformation:} It aggregates hourly trip profiles from \texttt{silver.fact\_mobility} and extracts them into a Python task. Using Scikit-Learn, it applies a K-Means algorithm ($k=3$) to classify days into distinct patterns (e.g., Weekdays vs. Weekends). The results are persisted in the \texttt{gold.typical\_day\_patterns} table.
+        \item \textbf{Output:} The DAG queries the generated Gold table to plot the temporal profiles using Matplotlib. The resulting image (\texttt{.png}) is uploaded to S3, visualizing the average hourly intensity for each identified cluster.
+    \end{itemize}
 
+    \item \textbf{DAG 32: Infrastructure Gap Analysis (\texttt{32\_bq2\_gaps})} \\
+    This pipeline implements the Gravity Model to identify infrastructure deficits.
+    \begin{itemize}
+        \item \textbf{Transformation:} It executes a batch SQL job to create the \texttt{gold.infrastructure\_gaps} table. This process joins mobility flows with population and economic metrics, calculating the ``Gravity Score'' and comparing it against actual trips to derive a \texttt{mismatch\_ratio} for every origin-destination pair.
+        \item \textbf{Output:} The DAG includes two visualization tasks using Kepler.gl. One generates a bubble map ranking zones by service level, and the other generates an arc map highlighting specific connections where potential demand exceeds actual supply. Both HTML reports are saved to S3.
+    \end{itemize}
 
-\subsection{Master Orchestrator (DAG 7)}
-[TODO]
+    \item \textbf{DAG 33: Functional Classification (\texttt{33\_bq3\_functional\_classification})} \\
+    This pipeline categorizes municipalities based on their role in the metropolitan network.
+    \begin{itemize}
+        \item \textbf{Transformation:} It filters mobility data via spatial polygons and calculates inflow/outflow ratios. A logic-based SQL query applies a decision tree to assign labels (e.g., ``Bedroom Community'', ``Activity Hub'') to each zone, storing the result in \texttt{gold.zone\_functional\_classification}.
+        \item \textbf{Output:} The final task joins these labels with the zone geometries to generate a Kepler.gl Choropleth map. This interactive dashboard allows urban planners to visualize the functional structure of the region and is automatically published to S3.
+    \end{itemize}
+\end{itemize}
+
 
 
 
@@ -343,13 +395,69 @@ To characterize the ``typical day'', we aggregated hourly flows and applied K-Me
     \label{fig:clusters}
 \end{figure}
 
+
 \subsection{Use Case 2: Infrastructure Gap Analysis}
-% [GUIDE]: Explain the Gravity Model implementation.
-We compared actual MITMA demand against theoretical demand derived from a gravity model:
-\begin{equation}
-    T_{ij} = k \cdot \frac{P_i \cdot E_j}{d_{ij}^2}
-\end{equation}
-The mismatch ratio calculated in the Gold layer highlights zones where actual transport usage significantly lags behind potential demand...
+
+The second business objective addresses the identification of zones where transport infrastructure fails to meet potential demand. To solve this, we implemented a \textbf{Gravity Model} in the Gold layer, comparing the theoretical interaction potential between municipalities against the actual mobility flows recorded by MITMA.
+
+\paragraph{Implementation Approach\\}
+The solution is orchestrated via an Airflow DAG (\texttt{32\_bq2\_gaps}). The logic follows a three-step process:
+
+\begin{enumerate}
+    \item \textbf{Theoretical Modeling:} We calculate a ``Gravity Score'' for every origin-destination pair using the classic impedance formula:
+    % [GUIDE]: Explain the Gravity Model implementation.
+    \begin{equation}
+        T_{ij} = k \cdot \frac{P_i \cdot E_j}{d_{ij}^2}
+    \end{equation}
+    where $P_i$ is the population at the origin (from \texttt{metric\_population}), $E_j$ is the economic attractiveness (using \texttt{income\_per\_capita} from \texttt{metric\_ine\_rent} as a proxy), and $d_{ij}$ is the distance from our pre-computed \texttt{dim\_zone\_distances}.
+    
+    \item \textbf{Dynamic Normalization ($k$-factor):} To make the theoretical score comparable to physical trips, the code dynamically calculates a normalization factor ($k$) by computing the ratio between the total sum of actual MITMA trips and the total sum of gravity scores for the period.
+    
+    \item \textbf{Gap Detection:} The final metric, \texttt{mismatch\_ratio}, is derived by dividing actual trips by the normalized potential. A ratio significantly below 1.0 indicates a connection where mobility is lower than demographic and economic factors suggest, highlighting a potential infrastructure deficit.
+\end{enumerate}
+
+\paragraph{Spatial Analytics and Visualization\\}
+The pipeline includes a spatial filtering mechanism allowing users to run this analysis on specific regions (e.g., passing a WKT Polygon for the ``Comunidad de Madrid''). Using DuckDB's spatial extension (\texttt{ST\_Intersects}), the system aggregates the results to generate two key visualizations using Kepler.gl:
+\begin{itemize}
+    \item \textbf{Service Level Ranking:} A bubble map where zones are sized by importance ($P \times E$) and colored by their average service level, instantly highlighting underserved economic hubs.
+    \item \textbf{Mobility Arcs:} A flow map visualizing specific origin-destination connections that show the highest disparity between potential and actual traffic.
+\end{itemize}
+
+
+\subsection{Use Case 3: Functional Zoning Classification}
+
+The third analytical product moves beyond simple traffic counting to characterize the \textit{functional role} of each municipality within the metropolitan network. By analyzing the directionality and retention of mobility flows, this use case automatically classifies zones into semantic categories (e.g., ``Bedroom Communities'' vs. ``Activity Hubs''), aiding urban planners in understanding regional dependencies.
+
+\paragraph{Methodology and Classification Logic\\}
+The implementation is encapsulated in the DAG \texttt{33\_bq3\_functional\_classification}. The logic aggregates the granular records from \texttt{fact\_mobility} into three distinct flow types per zone: \textbf{Inflow} (trips entering), \textbf{Outflow} (trips leaving), and \textbf{Internal} (trips starting and ending in the same zone). 
+
+Using these aggregates, two key indices are calculated:
+\begin{enumerate}
+    \item \textbf{Net Flow Ratio:} Measures the balance of attraction.
+    \[
+    R_{\text{net}} = \frac{\text{Inflow} - \text{Outflow}}{\text{Inflow} + \text{Outflow}}
+    \]
+    \item \textbf{Retention Rate:} Measures the zone's self-sufficiency.
+    \[
+    R_{\text{retention}} = \frac{\text{Internal}}{\text{Outflow} + \text{Internal}}
+    \]
+\end{enumerate}
+
+Based on these metrics, the SQL pipeline applies a hierarchical decision tree to assign a \texttt{functional\_label} to each municipality:
+
+\begin{itemize}
+    \item \textbf{Self-Sustaining Cell:} Zones with high retention ($R_{\text{retention}} > 0.20$), indicating a municipality that satisfies most of its residents' needs locally.
+    \item \textbf{Activity Hub (Importer):} Zones with a positive net flow ($R_{\text{net}} > 0$), typically business districts or commercial centers attracting commuters.
+    \item \textbf{Bedroom Community (Exporter):} Zones with a negative net flow ($R_{\text{net}} < 0$), characterizing residential areas where the population commutes out for work.
+    \item \textbf{Balanced / Transit Zone:} Areas with neutral flow ratios acting as connectors.
+\end{itemize}
+
+\paragraph{Visualization Strategy\\}
+The results are materialized in a Kepler.gl dashboard combining two visual layers to provide context:
+\begin{itemize}
+    \item \textbf{Polygon Layer (Choropleth):} Displays the administrative boundaries colored by their \texttt{functional\_label}. This reveals regional clusters (e.g., a ring of ``Bedroom Communities'' surrounding a central ``Activity Hub'').
+    \item \textbf{Centroid Layer:} Displays bubbles sized by \texttt{total\_activity} (Sum of In + Out + Internal), allowing users to distinguish between major metropolitan centers and smaller rural nodes regardless of their functional classification.
+\end{itemize}
 
 \section{Discussion}
 % [GUIDE]: Discuss the value. How does this help the "Transport Expert"?
