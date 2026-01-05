@@ -84,7 +84,7 @@ To enable cloud storage, metadata management, and elastic compute, you must conf
     ```json
     {
     "region_name": "eu-central-1",
-    "bucket_name": "ducklake-dbproject"
+    "bucket_name": "Your_bucket_name"
     }
     ```
 *   **Note:** The IAM User associated with these keys must have the `batch:SubmitJob`, `batch:DescribeJobs`, and `iam:PassRole` permissions.
