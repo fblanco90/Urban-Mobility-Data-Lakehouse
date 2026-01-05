@@ -104,7 +104,7 @@ def gold_analytics():
 
         df = con.execute(f"""
             WITH municipios_in_polygon AS (
-                SELECT zone_id, zone_name, ST_Centroid(polygon) AS centroid, polygon
+                SELECT zone_id, zone_name, centroid, polygon
                 FROM lakehouse.silver.dim_zones
                 WHERE ST_Intersects({filter_geom}, polygon)
             )
@@ -234,7 +234,7 @@ def gold_analytics():
 
         df = con.execute(f"""
             WITH municipios_in_polygon AS (
-                SELECT zone_id, ST_Centroid(polygon) AS centroid, polygon
+                SELECT zone_id, centroid, polygon
                 FROM lakehouse.silver.dim_zones
                 WHERE ST_Contains({filter_geom}, polygon)
             )
