@@ -5,6 +5,7 @@ from utils_db import get_connection
 import logging
 import os
 import pandas as pd
+import json
 from keplergl import KeplerGl 
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
@@ -160,7 +161,9 @@ def bq3_functional_classification_dag():
                     -- Transformación de coordenadas para Kepler (centros de los municipios)
                     ST_X(ST_Transform(m.centroid, 'EPSG:25830', 'OGC:CRS84')) as lon,
                     ST_Y(ST_Transform(m.centroid, 'EPSG:25830', 'OGC:CRS84')) as lat,
-                    ST_AsText(m.polygon) as wkt_polygon
+                    ST_AsGeoJSON(
+                        ST_Transform(m.polygon, 'EPSG:25830', 'OGC:CRS84')
+                    ) AS geometry
                 FROM lakehouse.gold.zone_functional_classification f
                 JOIN lakehouse.silver.dim_zones m ON f.zone_id = m.zone_id
             """).df()
@@ -174,13 +177,23 @@ def bq3_functional_classification_dag():
         df['retention_rate'] = pd.to_numeric(df['retention_rate'], errors='coerce').fillna(0.0)
         df['total_activity'] = pd.to_numeric(df['total_activity'], errors='coerce').fillna(0).astype(int)
 
-        # Kepler falla si hay NaNs en lat/lon
-        df = df.dropna(subset=['lat', 'lon'])
+        # Eliminamos filas si no hay datos esenciales
+        df = df.dropna(subset=['functional_label', 'total_activity', 'lat', 'lon', 'geometry'])
+        df["geometry"] = df["geometry"].apply(json.loads)
 
-        df["size_activity"] = (df["total_activity"].clip(lower=50).pow(0.5))   # mínimo semántico
+        # Limpiamos espacios y valores nulos
+        df['functional_label'] = df['functional_label'].astype(str).str.strip().fillna("Unknown")
 
+        # Filtramos solo los valores válidos
+        valid_labels = [
+            "Self-Sustaining Cell",
+            "Activity Hub (Importer)",
+            "Bedroom Community (Exporter)",
+            "Balanced / Transit Zone"
+        ]
+        df = df[df['functional_label'].isin(valid_labels)]
 
-        # --- CONFIGURACIÓN KEPLER (Cambiamos Arcos por Polígonos/Puntos) ---
+        # --- CONFIGURACIÓN KEPLER ---
         dataset_name = "Functional Classification"
         kepler_config = {
             "version": "v1",
@@ -188,40 +201,69 @@ def bq3_functional_classification_dag():
                 "visState": {
                     "layers": [
                         {
-                            "id": "label_layer",
+                            "id": "activity_points_layer",
                             "type": "point",
                             "config": {
-                                "dataId": dataset_name, # Debe coincidir con el nombre en data={}
-                                "label": "Municipios por Función",
+                                "dataId": dataset_name,
+                                "label": "Intensidad de Actividad (Centroide)",
                                 "isVisible": True,
                                 "columns": {"lat": "lat", "lng": "lon"},
                                 "visConfig": {
-                                    "radius": 80,
+                                    "radius": 10,
                                     "fixedRadius": False,
-                                    "opacity": 0.8,
+                                    "opacity": 0.9,
+                                    "outline": True,
+                                    "thickness": 1,
+                                    "strokeColor": [255, 255, 255],
+                                    "color": [0, 0, 0] # COLOR NEGRO
+                                }
+                            },
+                             "visualChannels": {
+                                    "sizeField": {"name": "total_activity", "type": "integer"},
+                                    "sizeScale": "sqrt"
+                                }
+                        },
+                        {
+                            "id": "polygon_layer",
+                            "type": "geojson",
+                            "config": {
+                                "dataId": dataset_name,
+                                "label": "Zonas por Clasificación",
+                                "isVisible": True,
+                                "columns": {"geojson": "geometry"},
+                                "visConfig": {
+                                    "opacity": 0.5,
+                                    "strokeColor": [255, 255, 255],
+                                    "filled": True, 
+                                    "thickness": 0.5,
                                     "colorRange": {
                                         "name": "Custom Scale",
                                         "type": "ordinal",
                                         "colors": ["#1E90FF", "#FF4500", "#32CD32", "#C8C8C8"]
-                                    },
-                                    "colorScale": "ordinal"
+                                    }
                                 }
-                                },
-                                "visualChannels": {
-                                    # Importante: Asegúrate de que estos nombres existan en el DF
+                            },
+                            "visualChannels": {
                                     "colorField": {"name": "functional_label", "type": "string"},
-                                    "colorScale": "ordinal",
-                                    "sizeField": {
-                                        "name": "size_activity",
-                                        "type": "integer"
-                                    },
-                                    "sizeScale": "sqrt"
-                            }
+                                    "colorScale": "ordinal"
+                            },
                         }
-                    ]
+                        
+                    ],
+                    "interactionConfig": {
+                        "tooltip": {
+                            "fieldsToShow": {
+                                dataset_name: [
+                                    {"name": "zone_name", "format": None},
+                                    {"name": "functional_label", "format": None},
+                                    {"name": "total_activity", "format": None}
+                                ]
+                            },
+                            "enabled": True
+                        }
+                    }
                 },
                 "mapState": {
-                    # Ajustado a Valencia según tus logs
                     "latitude": 39.45,
                     "longitude": -0.47,
                     "zoom": 10,
