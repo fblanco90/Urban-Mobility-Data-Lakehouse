@@ -179,8 +179,8 @@ def bq3_functional_classification():
                     f.retention_rate,
                     f.internal_trips + f.inflow + f.outflow as total_activity,
                     -- Transformación de coordenadas para Kepler (centros de los municipios)
-                    ST_X(ST_Transform(ST_Centroid(m.polygon), 'EPSG:25830', 'OGC:CRS84')) as lon,
-                    ST_Y(ST_Transform(ST_Centroid(m.polygon), 'EPSG:25830', 'OGC:CRS84')) as lat,
+                    ST_X(ST_Transform(m.centroid, 'EPSG:25830', 'OGC:CRS84')) as lon,
+                    ST_Y(ST_Transform(m.centroid, 'EPSG:25830', 'OGC:CRS84')) as lat,
                     ST_AsGeoJSON(
                         ST_Transform(m.polygon, 'EPSG:25830', 'OGC:CRS84')
                     ) AS geometry
