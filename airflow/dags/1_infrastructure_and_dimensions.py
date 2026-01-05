@@ -319,6 +319,7 @@ def infrastructure_and_dimensions():
                     ine_code,
                     zone_name,
                     g.geom AS polygon,
+                    ST_Centroid(g.geom) AS centroid,
                     CURRENT_TIMESTAMP AS processed_at
                     
                 FROM raw_zones r
@@ -446,7 +447,7 @@ def infrastructure_and_dimensions():
                 SELECT 
                     a.zone_id AS origin_zone_id,
                     b.zone_id AS destination_zone_id,
-                    GREATEST(0.5, st_distance(ST_Centroid(a.polygon), ST_Centroid(b.polygon)) / 1000) AS dist_km
+                    GREATEST(0.5, st_distance(a.centroid, b.centroid) / 1000) AS dist_km
                 FROM lakehouse.silver.dim_zones a, lakehouse.silver.dim_zones b
                 WHERE a.zone_id != b.zone_id;
             """)
