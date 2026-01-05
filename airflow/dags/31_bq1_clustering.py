@@ -149,48 +149,145 @@ def gold_analytics():
             con.execute("CREATE OR REPLACE TABLE lakehouse.gold.typical_od_matrices AS SELECT * FROM tmp_od")
 
     @task
-    def plot_heatmaps_to_s3(**context):
+    def plot_interactive_heatmap_html(**context):
+        """
+        Genera un único archivo HTML interactivo con un desplegable para seleccionar
+        el heatmap del clúster deseado para una hora específica.
+        Requiere la librería 'plotly' instalada en el entorno.
+        """
         target_hour = context['params']['target_hour']
-
-        with get_connection() as con:
-            df = con.execute("SELECT * FROM lakehouse.gold.typical_od_matrices").df()
         
-        if df.empty: return
+        logging.info(f"--- Iniciando generación de Heatmap Interactivo para la hora {target_hour} ---")
 
-        s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+        # 1. Obtener datos
+        with get_connection() as con:
+            df = con.execute("SELECT * FROM lakehouse.gold.typical_od_matrices WHERE hour = ?", (target_hour,)).df()
+        
+        if df.empty:
+            logging.warning("No hay datos para la hora seleccionada. No se genera HTML.")
+            return
 
-        df_hour = df[df['hour'] == target_hour]
+        clusters = sorted(df['cluster_id'].unique())
+        n_clusters = len(clusters)
+        
+        # Inicializamos la figura y la lista de botones para el menú
+        fig = go.Figure()
+        buttons = []
 
-        for cluster_id in df_hour['cluster_id'].unique():
-            cluster_data = df_hour[df_hour['cluster_id'] == cluster_id]
+        # 2. Iterar por cada clúster para crear los trazos (traces) y los botones
+        for i, cluster_id in enumerate(clusters):
+            logging.info(f"Procesando Cluster {cluster_id}...")
+            cluster_data = df[df['cluster_id'] == cluster_id].copy()
 
-            # --- Selección de Top Zonas  ---
-            top_zones = cluster_data.groupby('origin')['trips'].sum().nlargest(10).index
-            cluster_data = cluster_data[
-                cluster_data['origin'].isin(top_zones) & 
-                cluster_data['destination'].isin(top_zones)
+            # Si hay pocas zonas, cogemos todas, si hay muchas, las top 15
+            n_zones_to_keep = 15 
+            if len(cluster_data['origin'].unique()) > n_zones_to_keep:
+                top_origins = cluster_data.groupby('origin')['trips'].sum().nlargest(n_zones_to_keep).index
+                top_dest = cluster_data.groupby('destination')['trips'].sum().nlargest(n_zones_to_keep).index
+                cluster_data = cluster_data[
+                    cluster_data['origin'].isin(top_origins) & 
+                    cluster_data['destination'].isin(top_dest)
+                ]
+            
+            if cluster_data.empty: continue
+
+            # Pivotamos para tener la matriz
+            matrix_df = cluster_data.pivot(index='origin', columns='destination', values='trips').fillna(0)
+            
+            # Preparar datos para Plotly
+            z_data = matrix_df.values
+            x_labels = matrix_df.columns.tolist()
+            y_labels = matrix_df.index.tolist()
+            
+            # Transformamos los datos Z a log10 para el color.
+            # Sumamos 1 para evitar log(0).
+            z_log = np.log10(z_data + 1)
+
+            # Creamos el trazo del heatmap
+            trace = go.Heatmap(
+                z=z_log,                # Usamos valores logarítmicos para la escala de color
+                x=x_labels,             # Destinos en eje X
+                y=y_labels,             # Orígenes en eje Y
+                colorscale='YlGnBu',    # Misma paleta que usabas en Seaborn
+                colorbar=dict(
+                    title='Intensidad (Escala Log)',
+                    tickvals=[0, 1, 2, 3, 4],
+                    ticktext=['1 (10⁰)', '10 (10¹)', '100 (10²)', '1k (10³)', '10k (10⁴)']
+                ),
+                # Tooltip personalizado para mostrar el valor REAL, no el logarítmico
+                hovertemplate='<b>Origen:</b> %{y}<br><b>Destino:</b> %{x}<br><b>Viajes (aprox):</b> %{customdata:.0f}<extra></extra>',
+                customdata=z_data,      # Pasamos los datos reales para el tooltip
+                visible=(i == 0)        # Solo el primer clúster es visible al inicio
+            )
+            fig.add_trace(trace)
+
+            # --- Creamos la definición del botón para este clúster ---
+            # Creamos una máscara booleana: [True, False, False] para el cluster 0, etc.
+            visibility_mask = [False] * n_clusters
+            visibility_mask[i] = True
+            
+            button = dict(
+                label=f"Cluster {cluster_id}",
+                method="update",
+                args=[
+                    {"visible": visibility_mask}, # Parte 1: Restyle (trazos)
+                    {"title.text": f"Matriz OD Interactiva - Cluster {cluster_id} (Hora: {target_hour:02d}h)"} # Parte 2: Relayout (título)
+                ]
+            )
+            buttons.append(button)
+
+        # 3. Configurar el Layout (Diseño) final y añadir el menú
+        fig.update_layout(
+            title=f"Matriz OD Interactiva - Cluster {clusters[0]} (Hora: {target_hour:02d}h)",
+            xaxis_title="Destino",
+            yaxis_title="Origen",
+            height=800, # Altura en píxeles
+            margin=dict(
+                l=200,  # Margen izquierdo fijo (ajusta este número si tus nombres son muy largos)
+                r=50,   # Margen derecho
+                t=100,  # Margen superior
+                b=150   # Margen inferior para los nombres en vertical del eje X
+            ),
+            yaxis=dict(
+                automargin=False,
+                ticksuffix="  "   
+            ),
+            updatemenus=[
+                dict(
+                    type="dropdown",
+                    direction="down",
+                    # x=1.1 alinea el menú con el borde derecho de la leyenda
+                    # y=1.15 lo sube por encima del gráfico y del título de la leyenda
+                    x=1.1, 
+                    y=1.15,
+                    xanchor='right', # El punto x=1.1 es la esquina derecha del menú
+                    yanchor='top',   # El punto y=1.15 es la esquina superior del menú
+                    # -------------------------
+                    showactive=True,
+                    buttons=buttons
+                )
             ]
-            
-            matrix = cluster_data.pivot(index='origin', columns='destination', values='trips').fillna(0)
-            
-            plt.figure(figsize=(12, 10))
-            
-            sns.heatmap(
-                matrix, 
-                annot=False, 
-                cmap="YlGnBu", 
-                norm=LogNorm() 
             )
 
-            plt.title(f"Matriz OD (Top Zonas) - Cluster {cluster_id} a las {target_hour:02d}:00h\n(Log Scale)")
+        logging.info("Generando archivo HTML...")
+        # 4. Guardar a un buffer de texto (StringIO para HTML)
+        html_buffer = io.StringIO()
+        # include_plotlyjs='cdn' hace que el archivo sea más ligero al cargar la librería de internet
+        fig.write_html(html_buffer, include_plotlyjs='cdn', full_html=True)
+        html_buffer.seek(0)
 
-            img_buffer = io.BytesIO()
-            plt.savefig(img_buffer, format='png', dpi=150)
-            img_buffer.seek(0)
-            
-            file_key = f"{S3_KEY_PREFIX}heatmap_cluster_{cluster_id}_h{target_hour}.png"
-            s3_hook.load_file_obj(img_buffer, key=file_key, bucket_name=S3_BUCKET, replace=True)
-            plt.close()
+        # 5. Subir a S3
+        s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+        file_key = f"{S3_KEY_PREFIX}interactive_heatmap_h{target_hour}.html"
+        
+        logging.info(f"Subiendo HTML a S3: s3://{S3_BUCKET}/{file_key}")
+        s3_hook.get_conn().put_object(
+            Body=html_buffer.getvalue(),
+            Bucket=S3_BUCKET,
+            Key=file_key,
+            ContentType='text/html'
+        )
+        logging.info("✅ Archivo HTML interactivo subido correctamente.")
 
     @task
     def cleanup():
@@ -278,6 +375,6 @@ def gold_analytics():
     prep = prepare_profiles_locally()
     proc = process_gold_patterns_locally()
     
-    prep >> proc >> [plot_heatmaps_to_s3(), plot_to_s3()] >> cleanup()
+    prep >> proc >> [plot_interactive_heatmap_html(), plot_to_s3()] >> cleanup()
 
 gold_analytics()
