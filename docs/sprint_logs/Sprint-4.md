@@ -5,9 +5,9 @@
 - Fernando Blanco Membrives
 - Joan Sánchez Verdú
 
-**Date:** 23/12/2025
+**Date:** 05/01/2026
 
-**Status:** In process
+**Status:** Done
 
 ## 1. Sprint Overview & Objectives
 
@@ -25,46 +25,40 @@
 
 ---
 
-## 2. Data Sourcing & Exploration
-* **CNIG (National Center for Geographic Information)**:
-
-    * Read from ...
----
-
-## 3. Data Layers
+## 2. Data Layers
 
 The layers have not been updated from last sprint.
 
-### 3.1. Bronze Layer Ingestion `(Done)`
+### 2.1. Bronze Layer Ingestion `(Done)`
 **Schema:**
-- ![alt text](../diagrams/Sprint4/Bronze_Schema_diagramS4.png)
+- ![alt text](../images/Sprint4/Bronze_Schema_diagramS4.png)
 ---
 
-### 3.2. Silver Layer Transformation `(Done)`
+### 2.2. Silver Layer Transformation `(Done)`
 **Schema:**
-- ![alt text](../diagrams/Sprint4/Silver_Schema_diagramS4.png)
+- ![alt text](../images/Sprint4/Silver_Schema_diagramS4.png)
 
 ---
 
-### 3.3. Gold Layer Analytics `(Done)`
+### 2.3. Gold Layer Analytics `(Done)`
 **Schema:**
-- ![alt text](../diagrams/Sprint4/Gold_Schema_diagramS4.png)
+- ![alt text](../images/Sprint4/Gold_Schema_diagramS4.png)
 
 ---
 
 
 ## Airflow
 NOT Unique DAG for ingestion. DAGs redesign:
-![alt text](../diagrams/AirflowMainDAGExecuted.PNG)
+![alt text](../images/AirflowDAGs/AirflowMainDAGExecuted.PNG)
 
 - DAG 1: Ingest Bronze and Silver from csvs (All but mobility data)
     - Only executed once.
+    - ![alt text](../images/AirflowDAGs/infrastructure_and_dimensions-DAG.png)
 - DAG 2: Ingest Bronze and Silver from a Day (Only mobility data) given a date range
-    - We can ingest days anytime without ingesting the rest of csvs
-- DAG 3: Generate Gold tables
+    - We can ingest days anytime without ingesting the rest of csvs.
+    - - ![alt text](../images/AirflowDAGs/mobility_ingestion-DAG.png)
+- DAG 3: Generate Gold tables and consultations
     - We can generate gold tables only when we have enough data
-- DAG 4: Controller of all 3 ingestion DAGs together (just if needed)
-    - Just in case it could be so easy to use to execute all the flux with all the days needed
-- DAG 5.1: Query gold and generate data for Bussines question 1
-- DAG 5.2: Query gold and generate data for Bussines question 2
-- DAG 5.3: Query gold and generate data for Bussines question 3 (our bussines question)
+    - DAG 3.1: Query gold and generate data for Bussines question 1
+    - DAG 3.2: Query gold and generate data for Bussines question 2
+    - DAG 3.3: Query gold and generate data for Bussines question 3 (our bussines question)

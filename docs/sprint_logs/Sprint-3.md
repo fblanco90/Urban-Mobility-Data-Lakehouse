@@ -40,7 +40,7 @@ New coordinates from `pyspainmobility` library.
 
 
 **Schema:**
-- ![alt text](../diagrams/Sprint3/Bronze_Schema_diagramS3.png)
+- ![alt text](../images/Sprint3/Bronze_Schema_diagramS3.png)
 ---
 
 ### 3.2. Silver Layer Transformation `(Done)`
@@ -60,7 +60,7 @@ New coordinates from `pyspainmobility` library.
 
 
 **Schema:**
-- ![alt text](../diagrams/Sprint3/Silver_Schema_diagramS3.png)
+- ![alt text](../images/Sprint3/Silver_Schema_diagramS3.png)
 
 ---
 
@@ -71,14 +71,14 @@ New coordinates from `pyspainmobility` library.
 
 
 **Schema:**
-- ![alt text](../diagrams/Sprint3/Gold_Schema_diagramS3.png)
+- ![alt text](../images/Sprint3/Gold_Schema_diagramS3.png)
 
 ---
 
 
 ## Airflow
 Unique DAG for ingestion:
-![alt text](../diagrams/AirflowMainDAGExecuted.PNG)
+![alt text](../images/AirflowDAGs/AirflowMainDAGExecuted.PNG)
 
 The specific responsibilities of the key tasks depicted in the diagram are as follows:
 - create_schemas: Initializes the DuckLake schemas (bronze, silver, gold) and the persistence layer for data quality logs.

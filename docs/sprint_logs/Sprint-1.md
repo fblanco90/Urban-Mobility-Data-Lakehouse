@@ -21,9 +21,6 @@ The primary objective of Sprint 1 is to design the foundational schemas for the 
 5.  Implement the aggregation logic for the Gold layer to support the key business questions.
 
 
-**Architecture Overview:**
-- ![alt text](../diagrams/Sprint1_architecture_diagram.png)
-
 ---
 
 ## 2. Data Sourcing & Exploration
@@ -66,7 +63,7 @@ The Bronze layer creates a raw, immutable, and performant copy of the source dat
 -   **Status:** The Bronze layer is complete and validated for the Sprint 1 sample data.
 
 - **Schema:**
-    - ![alt text](../diagrams/Sprint1/Bronze_Schema_diagram.png)
+    - ![alt text](../images/Sprint1/Bronze_Schema_diagram.png)
 
 ---
 
@@ -142,7 +139,7 @@ This view serves as a powerful **dimensional summary table** describing the stru
 - **Audit Trail**: Preserved original filenames and ingestion timestamps for traceability of the mobility
 - **Data Typing**: Ensured proper data types for efficient storage and query performance
 - **Schema:**
-    - ![alt text](../diagrams/Sprint1/Silver_Schema_diagram.png)
+    - ![alt text](../images/Sprint1/Silver_Schema_diagram.png)
 
 ---
 
@@ -213,5 +210,5 @@ LOAD 'spatial';
 
 **Schema Design:**
 - **Schema:**
-    - ![alt text](../diagrams/Sprint1/Gold_Schema_diagram.png)
+    - ![alt text](../images/Sprint1/Gold_Schema_diagram.png)
 ---
