@@ -347,24 +347,24 @@ The analytical layer is materialized through three dedicated Airflow pipelines. 
 
 \begin{itemize}
     \item \textbf{DAG 31: Typical Day Clustering (\texttt{31\_bq1\_clustering})} \\
-    This pipeline addresses the characterization of mobility patterns.
+    This pipeline addresses the characterization of mobility patterns via unsupervised learning.
     \begin{itemize}
-        \item \textbf{Transformation:} It aggregates hourly trip profiles from \texttt{silver.fact\_mobility} and extracts them into a Python task. Using Scikit-Learn, it applies a K-Means algorithm ($k=3$) to classify days into distinct patterns (e.g., Weekdays vs. Weekends). The results are persisted in the \texttt{gold.typical\_day\_patterns} table.
-        \item \textbf{Output:} The DAG queries the generated Gold table to plot the temporal profiles using Matplotlib. The resulting image (\texttt{.png}) is uploaded to S3, visualizing the average hourly intensity for each identified cluster.
+        \item \textbf{Transformation:} It aggregates mobility data to extract hourly profiles and applies K-Means clustering ($k=3$) using Scikit-Learn to categorize days. The pipeline uses two tables: \texttt{gold.typical\_day\_patterns} and \texttt{gold.typical\_od\_matrices} for spatial distribution.
+        \item \textbf{Output:} The DAG produces a comprehensive reporting suite in the results directory, including a static Matplotlib chart for temporal profiles, an interactive Plotly HTML heatmap for detailed OD analysis, and a summary Markdown report.
     \end{itemize}
 
     \item \textbf{DAG 32: Infrastructure Gap Analysis (\texttt{32\_bq2\_gaps})} \\
-    This pipeline implements the Gravity Model to identify infrastructure deficits.
+    This pipeline implements a Gravity Model to quantify the disparity between theoretical potential and actual mobility.
     \begin{itemize}
-        \item \textbf{Transformation:} It executes a batch SQL job to create the \texttt{gold.infrastructure\_gaps} table. This process joins mobility flows with population and economic metrics, calculating the ``Gravity Score'' and comparing it against actual trips to derive a \texttt{mismatch\_ratio} for every origin-destination pair.
-        \item \textbf{Output:} The DAG includes two visualization tasks using Kepler.gl. One generates a bubble map ranking zones by service level, and the other generates an arc map highlighting specific connections where potential demand exceeds actual supply. Both HTML reports are saved to S3.
+        \item \textbf{Transformation:} It executes a SQL batch job to create \texttt{gold.infrastructure\_gaps} table. By integrating population, income, and distance metrics, it calculates a theoretical ``Gravity Score'' ($P \cdot E / d^2$) and compares it with actual flows to derive a \texttt{mismatch\_ratio} for every connection.
+        \item \textbf{Output:} The DAG utilizes Kepler.gl to generate two interactive geospatial reports: a \textit{Service Level Ranking} (bubble map) identifying underserved zones and a \textit{Mobility Gaps} visualization (arc map) showing specific connections where demand exceeds supply, alongside a summary Markdown report.
     \end{itemize}
 
     \item \textbf{DAG 33: Functional Classification (\texttt{33\_bq3\_functional\_classification})} \\
-    This pipeline categorizes municipalities based on their role in the metropolitan network.
+    This pipeline categorizes municipalities based on their role in the metropolitan network (e.g., residential vs. commercial hubs).
     \begin{itemize}
-        \item \textbf{Transformation:} It filters mobility data via spatial polygons and calculates inflow/outflow ratios. A logic-based SQL query applies a decision tree to assign labels (e.g., ``Bedroom Community'', ``Activity Hub'') to each zone, storing the result in \texttt{gold.zone\_functional\_classification}.
-        \item \textbf{Output:} The final task joins these labels with the zone geometries to generate a Kepler.gl Choropleth map. This interactive dashboard allows urban planners to visualize the functional structure of the region and is automatically published to S3.
+        \item \textbf{Transformation:} It calculates critical flow metrics (inflow/outflow ratios and retention rates) via a SQL batch job. A logic-based decision tree assigns a functional label (e.g., ``Bedroom Community'', ``Activity Hub'') to each zone, persisting the results in \texttt{gold.zone\_functional\_classification}.
+        \item \textbf{Output:} The DAG generates a Kepler.gl Choropleth map that colors zone geometries by their functional role and overlays an activity intensity layer (bubbles). This interactive dashboard, accompanied by a Markdown summary, allows urban planners to visualize the structural hierarchy of the region.
     \end{itemize}
 \end{itemize}
 
@@ -378,15 +378,33 @@ The analytical layer is materialized through three dedicated Airflow pipelines. 
 
 \section{Results and Use Cases}
 
-\subsection{Use Case 1: Typical Mobility Patterns}
-To characterize the ``typical day'', we aggregated hourly flows and applied K-Means clustering...
+\subsection{Use Case 1: Typical Mobility Patterns and Profiling}
 
-\begin{figure}[H]
-    \centering
-    % \includegraphics[width=0.8\textwidth]{path/to/your/clustering_plot.png}
-    \caption{Hourly mobility profiles identified (Weekdays vs. Weekends).}
-    \label{fig:clusters}
-\end{figure}
+The first business objective focuses on identifying and characterizing standard mobility behaviors within the reference year (2023). Instead of relying on static calendar rules (e.g., assuming all Mondays are identical), we implemented an unsupervised machine learning approach in the Gold layer to discover intrinsic daily patterns—distinguishing between standard workdays, holidays, and transition days based on actual hourly flow shapes.
+
+\paragraph{Implementation Approach\\}
+The solution is orchestrated via an Airflow DAG (\texttt{31\_bq1\_clustering}). The pipeline employs a hybrid processing strategy: using DuckDB for heavy aggregations and Python (Scikit-Learn) for in-memory clustering. The logic follows a four-step process:
+
+\begin{enumerate}
+    \item \textbf{Feature Extraction:} We aggregate the granular records from \texttt{silver.fact\_mobility} into hourly profiles. To ensure the clustering algorithm focuses on the \textit{shape} of the day (e.g., morning/evening peaks) rather than absolute volume, we normalize the data vector for every date $d$:
+    \begin{equation}
+        V_{d, h} = \frac{T_{d, h}}{\sum_{h=0}^{23} T_{d, h}}
+    \end{equation}
+    where $T_{d, h}$ is the total trips on day $d$ at hour $h$.
+    
+    \item \textbf{Unsupervised Classification (K-Means):} These normalized vectors are fed into a K-Means algorithm (configured with $k=3$ clusters). This automatically classifies every date in the analyzed period into distinct profiles (e.g., ``Standard Workday,'' ``Weekend/Leisure,'' or ``Holiday'').
+    
+    \item \textbf{Pattern Projection:} Once dates are labeled, the system projects these labels back onto the massive dataset. Using DuckDB's SQL engine to handle the scale, we compute the average Origin-Destination (OD) matrix for each identified cluster, materializing the results in \texttt{gold.typical\_od\_matrices}.
+\end{enumerate}
+
+\paragraph{Visualization and Reporting\\}
+To allow transport experts to validate these patterns, the pipeline automatically generates two types of analytical outputs stored in the results bucket:
+
+\begin{itemize}
+    \item \textbf{Temporal Profiles (Static):} A line chart visualization (via Matplotlib) plotting the centroids of the identified clusters. This clearly highlights the temporal differences between profiles, such as the steep morning commute peak in workdays versus the smoother midday curve typical of weekends.
+    \item \textbf{Interactive OD Heatmaps:} An HTML report generated using Plotly. This tool allows analysts to interactively select a specific cluster and hour (e.g., ``Cluster 0 at 08:00 AM'') to visualize the spatial distribution of trips. The heatmap uses a logarithmic color scale to handle the high variance in trip counts between major urban centers and rural peripheries.
+\end{itemize}
+
 
 
 \subsection{Use Case 2: Infrastructure Gap Analysis}
@@ -483,7 +501,7 @@ Despite the success of the architecture, several limitations were identified dur
     
     \item \textbf{Latency and Real-Time Analysis:} The current architecture is designed for $T+1$ (Daily) batch processing. Due to the provisioning time of AWS Batch instances and the file-based ingestion nature of the source, this system is not suitable for real-time traffic monitoring. Use cases requiring sub-minute latency (e.g., immediate accident detection or live congestion management) would require a Streaming architecture (e.g., Kafka + Flink) rather than the current Lakehouse approach.
 \end{itemize}
-\newpage
+
 % --- BIBLIOGRAPHY ---
 \begin{thebibliography}{9}
 
