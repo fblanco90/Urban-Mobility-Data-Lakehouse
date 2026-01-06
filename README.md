@@ -1,5 +1,14 @@
 # 🇪🇸 3-Tier Data Lakehouse for Spanish Mobility Analysis
 
+## 📑 Table of Contents
+1. [Authors](#-authors)
+2. [Repository Structure](#-repository-structure)
+3. [Methodology](#-methodology)
+4. [Setup & Installation](#-setup--installation)
+5. [Cloud Lakehouse Configuration](#️-cloud-lakehouse-configuration)
+6. [Verification](#-verification)
+7. [Data Pipelines (DAGs)](#️-data-pipelines-dags)
+
 ## 👥 Authors
 
 *   **María López Hernández**
@@ -12,6 +21,9 @@
 This project implements a **3-tier Data Lakehouse** (Bronze, Silver, Gold) designed to process and analyze public mobility data from the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE).
 
 The infrastructure follows a Medallion Architecture, utilizing **DuckDB** for processing, **AWS S3** for storage, and **Neon (Postgres)** for metadata management.
+
+
+
 
 ## 📂 Repository Structure
 
@@ -144,12 +156,10 @@ This DAG performs a full end-to-end test of the **Cloud Infrastructure**. It ver
 
 The orchestration logic is divided into specialized DAGs to ensure modularity, scalability, and ease of maintenance:
 
-1.  **Infrastructure & Dimensions DAG**: Handles the ingestion of low-frequency static data (INE demographics, MITMA zoning, and Calendars). It establishes the schema foundations and builds the Bronze and Silver dimension tables.
-    
-2.  **Mobility Ingestion DAG**: A parameterized worker pipeline designed for high-volume processing. It accepts specific date ranges to ingest, clean, and transform daily mobility files (MITMA OD Matrices) from Bronze to Silver using atomic tasks.
-    
-3.  **Gold Generation DAG**: Triggered upon the completion of ingestion, this pipeline aggregates Silver data to construct core analytical models (e.g., K-Means Clustering, Gravity Models) in the Gold layer.
-    
-4.  **Business Reporting DAGs (4, 5 & 6)**: A set of independent, on-demand DAGs designed to query the pre-computed Gold layer. These are isolated from the ELT process to allow "Transport Experts" to generate specific reports (e.g., polygon filters or specific time windows) without re-processing the underlying data.
+*   **Infrastructure & Dimensions DAG:** Handles the ingestion of low-frequency static data (INE demographics, MITMA zoning, and Calendars). It establishes the schema foundations and builds the Bronze and Silver dimension tables.
+
+*   **Mobility Ingestion DAG:** A parameterized worker pipeline designed for high-volume processing. It accepts specific date ranges to ingest, clean, and transform daily mobility files (MITMA OD Matrices) from Bronze to Silver using atomic tasks.
+
+*   **Gold Generations and Consultings (DAGs 31–33):** These pipelines consolidate the analytical logic and reporting into unified flows. Triggered on-demand with custom parameters (e.g., specific spatial polygons or date ranges), they first materialize aggregated Gold tables using DuckDB and immediately generate final visual assets (Kepler.gl maps, Matplotlib charts), embedded in a markdown file.
 
 ---
