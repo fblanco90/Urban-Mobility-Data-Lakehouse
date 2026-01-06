@@ -8,23 +8,32 @@ import pandas as pd
 import json
 from keplergl import KeplerGl 
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.hooks.base import BaseHook
 
 # --- CONFIGURATION ---
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
+aws = BaseHook.get_connection("aws_s3_conn")
+S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
 
 @dag(
-    dag_id="bq3_functional_classification",
+    dag_id="33_bq3_functional_classification",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
     params={
         "start_date": Param("20230101", type="string", description="YYYY-MM-DD"),
         "end_date": Param("20231231", type="string", description="YYYY-MM-DD"),
-        "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)", description="Paste your WKT Polygon here.")
+        "polygon_wkt": Param(DEFAULT_POLYGON, type="string", title="Spatial Filter (WKT)", description="Paste your WKT Polygon here."),
+        "input_crs": Param(
+            "EPSG:25830", 
+            enum=["EPSG:25830", "OGC:CRS84", "EPSG:4326"], 
+            title="Coordinate Reference System (CRS)",
+            description="25830 (Meters), CRS84 (Lon/Lat), 4326 (Lat/Lon)"
+        )
     },
     tags=['mobility', 'gold', 'visualization', 'reporting']
 )
-def bq3_functional_classification_dag():
+def bq3_functional_classification():
 
     @task
     def classify_zone_functions(**context):
@@ -36,10 +45,24 @@ def bq3_functional_classification_dag():
         input_wkt = params['polygon_wkt']
         sd_raw = str(params['start_date']) # "20230101"
         ed_raw = str(params['end_date'])   # "20231231"
+        input_crs = params['input_crs']
 
         # Transformamos a formato YYYY-MM-DD (añadiendo los guiones)
         start_date = f"{sd_raw[:4]}-{sd_raw[4:6]}-{sd_raw[6:]}"
         end_date = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
+
+        # Construcción dinámica de la geometría de filtrado
+        if input_crs == "EPSG:25830":
+            # Caso 1: Ya está en el sistema de la capa Silver (metros)
+            filter_geom = f"ST_GeomFromText('{input_wkt}')"
+            
+        elif input_crs == "OGC:CRS84":
+            # Caso 2: Estándar GIS (Longitud, Latitud)
+            filter_geom = f"ST_Transform(ST_GeomFromText('{input_wkt}'), 'OGC:CRS84', 'EPSG:25830')"
+            
+        elif input_crs == "EPSG:4326":
+            # Caso 3: Estándar Geodésico (Latitud, Longitud)
+            filter_geom = f"ST_Transform(ST_GeomFromText('{input_wkt}'), 'EPSG:4326', 'EPSG:25830')"
         
         logging.info(f"--- 🏷️ Filtrando por polígono: {input_wkt[:50]}... ---")
 
@@ -53,7 +76,7 @@ def bq3_functional_classification_dag():
                 selected_zones AS (
                     SELECT zone_id, zone_name
                     FROM lakehouse.silver.dim_zones
-                    WHERE ST_Intersects(polygon, ST_GeomFromText('{input_wkt}'))
+                    WHERE ST_Intersects(polygon, {filter_geom})
                 ),
 
                 -- 2. Filtrar flujos de movilidad solo para esas zonas
@@ -62,8 +85,7 @@ def bq3_functional_classification_dag():
                     FROM lakehouse.silver.fact_mobility f
                     INNER JOIN selected_zones sz ON f.origin_zone_id = sz.zone_id
                     WHERE f.origin_zone_id != f.destination_zone_id
-                    AND f.partition_date >= '{start_date}' 
-                    AND f.partition_date <= '{end_date}'
+                        AND f.partition_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
                     
                     UNION ALL
                     
@@ -71,8 +93,7 @@ def bq3_functional_classification_dag():
                     FROM lakehouse.silver.fact_mobility f
                     INNER JOIN selected_zones sz ON f.destination_zone_id = sz.zone_id
                     WHERE f.origin_zone_id != f.destination_zone_id
-                    AND f.partition_date >= '{start_date}' 
-                    AND f.partition_date <= '{end_date}'
+                        AND f.partition_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
                     
                     UNION ALL
                     
@@ -80,8 +101,7 @@ def bq3_functional_classification_dag():
                     FROM lakehouse.silver.fact_mobility f
                     INNER JOIN selected_zones sz ON f.origin_zone_id = sz.zone_id
                     WHERE f.origin_zone_id = f.destination_zone_id
-                    AND f.partition_date >= '{start_date}' 
-                    AND f.partition_date <= '{end_date}'
+                        AND f.partition_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
                 ),
 
                 -- 3. Agregación de estadísticas por zona
@@ -284,7 +304,7 @@ def bq3_functional_classification_dag():
         s3_hook.load_file(
             filename=local_path,
             key=f"results/bq3/kepler_functional_{run_id}.html",
-            bucket_name="ducklake-bdproject",
+            bucket_name=S3_BUCKET,
             replace=True
         )
         
@@ -297,4 +317,4 @@ def bq3_functional_classification_dag():
 
     classification_task >> map_task
 
-bq3_functional_classification_dag()
+bq3_functional_classification()

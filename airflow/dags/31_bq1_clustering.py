@@ -48,11 +48,24 @@ def gold_analytics():
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
     sql_profiles = """
+    {% set input_crs = params.input_crs %}
+    {% set polygon_wkt = params.polygon_wkt %}
+    
+    {% if input_crs == 'EPSG:25830' %}
+        {% set filter_geom = "ST_GeomFromText('" ~ polygon_wkt ~ "')" %}
+    {% elif input_crs == 'OGC:CRS84' %}
+        {% set filter_geom = "ST_Transform(ST_GeomFromText('" ~ polygon_wkt ~ "'), 'OGC:CRS84', 'EPSG:25830')" %}
+    {% elif input_crs == 'EPSG:4326' %}
+        {% set filter_geom = "ST_Transform(ST_GeomFromText('" ~ polygon_wkt ~ "'), 'EPSG:4326', 'EPSG:25830')" %}
+    {% else %}
+        {% set filter_geom = "ST_GeomFromText('" ~ polygon_wkt ~ "')" %}
+    {% endif %}    
+
     CREATE OR REPLACE TABLE silver.tmp_gold_profiles_agg AS
     WITH municipios_in_polygon AS (
         SELECT zone_id, zone_name 
         FROM silver.dim_zones
-        WHERE ST_Intersects(ST_GeomFromText('{{ params.polygon_wkt }}'), polygon)
+        WHERE ST_Intersects({{ filter_geom }}, polygon)
     ),
     filtered_trips AS (
         SELECT 
@@ -98,6 +111,7 @@ def gold_analytics():
             df_raw = con.execute("SELECT * FROM lakehouse.silver.tmp_gold_profiles_agg").df()
         
         if df_raw.empty:
+            print(f"⚠️ ¡Atención! El DataFrame está vacío para las fechas y polígono seleccionados.")
             return
 
         # Sumamos los viajes por día y hora (ignorando origen/destino)
@@ -248,7 +262,6 @@ def gold_analytics():
                     y=1.15,
                     xanchor='right', # El punto x=1.1 es la esquina derecha del menú
                     yanchor='top',   # El punto y=1.15 es la esquina superior del menú
-                    # -------------------------
                     showactive=True,
                     buttons=buttons
                 )
@@ -256,34 +269,16 @@ def gold_analytics():
             )
 
         logging.info("Generando archivo HTML...")
-        # # 4. Guardar a un buffer de texto (StringIO para HTML)
-        # html_buffer = io.StringIO()
-        # # include_plotlyjs='cdn' hace que el archivo sea más ligero al cargar la librería de internet
-        # fig.write_html(html_buffer, include_plotlyjs='cdn', full_html=True)
-        # html_buffer.seek(0)
 
-        # # 5. Subir a S3
-        # s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
-        # file_key = f"{S3_KEY_PREFIX}interactive_heatmap_h{target_hour}.html"
-        
-        # logging.info(f"Subiendo HTML a S3: s3://{S3_BUCKET}/{file_key}")
-        # s3_hook.get_conn().put_object(
-        #     Body=html_buffer.getvalue(),
-        #     Bucket=S3_BUCKET,
-        #     Key=file_key,
-        #     ContentType='text/html'
-        # )
-        # logging.info("✅ Archivo HTML interactivo subido correctamente.")
-
-        file_path = os.path.join(OUTPUT_FOLDER, f"interactive_heatmap_h{target_hour}.html")
+        file_path = os.path.join(OUTPUT_FOLDER, f"interactive_heatmap.html")
         fig.write_html(file_path, include_plotlyjs='cdn')
         logging.info(f"✅ HTML guardado en: {file_path}")
 
     @task
     def cleanup():
         with get_connection() as con:            
-            con.execute("DROP TABLE IF EXISTS silver.tmp_gold_profiles_agg;")
-            con.execute("DROP TABLE IF EXISTS gold.typical_od_matrices;")
+            con.execute("DROP TABLE IF EXISTS lakehouse.silver.tmp_gold_profiles_agg;")
+            con.execute("DROP TABLE IF EXISTS lakehouse.gold.typical_od_matrices;")
 
     @task
     def plot_to_local(**context):
@@ -334,28 +329,7 @@ def gold_analytics():
             
             plt.tight_layout()
 
-            # # 4. Save Plot to Memory Buffer
-            # img_buffer = io.BytesIO()
-            # plt.savefig(img_buffer, format='png', dpi=300)
-            # img_buffer.seek(0)
-
-            # # 5. Upload to Amazon S3
-            # s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
-            # file_key = f"{S3_KEY_PREFIX}mobility_report_{start_dt}_{end_dt}.png"
-            
-            # logging.info(f"Uploading file to S3: s3://{S3_BUCKET}/{file_key}")
-            
-            # s3_hook.load_file_obj(
-            #     file_obj=img_buffer,
-            #     key=file_key,
-            #     bucket_name=S3_BUCKET,
-            #     replace=True
-            # )
-            
-            # logging.info("✅ Plot successfully uploaded to S3.")
-            # plt.close(fig)
-
-            file_path = os.path.join(OUTPUT_FOLDER, f"mobility_report_{start_dt}_{end_dt}.png")
+            file_path = os.path.join(OUTPUT_FOLDER, f"mobility_report.png")
             plt.savefig(file_path, dpi=300)
             plt.close(fig)
             logging.info(f"✅ Imagen guardada en: {file_path}")
@@ -378,14 +352,10 @@ def gold_analytics():
         target_h = params['target_hour']
         
         # Define filenames
-        png_name = f"mobility_report_{start_dt}_{end_dt}.png"
-        html_name = f"interactive_heatmap_h{target_h}.html"
-        md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ1_{start_dt}.md")
+        png_name = f"mobility_report.png"
+        html_name = f"interactive_heatmap.html"
+        md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ1.md")
         
-        # S3 Public URL (or internal reference)
-        # s3_base_url = f"https://{S3_BUCKET}.s3.eu-central-1.amazonaws.com/{S3_KEY_PREFIX}"
-
-        # Mejoramos el espaciado con saltos de línea extra (\n) para asegurar el renderizado
         markdown_content = f"""# Business Question 1: Typical Mobility Patterns (2023)
 
 ## 1. Execution Summary
@@ -418,17 +388,6 @@ Access the interactive tool for zone-to-zone flows here:
 * **Storage:** DuckLake for ACID storage.
 """
 
-        # s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
-        # s3_client = s3_hook.get_conn()
-                
-        # s3_client.put_object(
-        #     Body=markdown_content,
-        #     Bucket=S3_BUCKET,
-        #     Key=f"{S3_KEY_PREFIX}{md_filename}",
-        #     ContentType='text/markdown'
-        # )
-                
-        # logging.info("✅ Markdown report successfully uploaded with public access.")
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(markdown_content)
         logging.info(f"✅ Reporte Markdown generado en: {md_path}")
