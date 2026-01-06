@@ -1,26 +1,25 @@
 import io
+import os
+import logging
+import pandas as pd
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.graph_objects as go
 from airflow.sdk import dag, task, Param
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.hooks.base import BaseHook
 from pendulum import datetime
 from utils_db import get_connection, run_batch_sql
-import pandas as pd
-from sklearn.cluster import KMeans
-import logging
-import matplotlib
+
+# from sklearn.cluster import KMeans
+# from matplotlib.colors import LogNorm
+
 matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-import seaborn as sns
-import plotly.graph_objects as go
-import numpy as np
 
+OUTPUT_FOLDER = "include/results/bq1"
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
-
-# --- CONFIGURATION ---
-aws = BaseHook.get_connection("aws_s3_conn")
-S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-bdproject')
-S3_KEY_PREFIX = "results/bq1/"
 
 @dag(
     dag_id="31_bq1_clustering",
@@ -43,6 +42,10 @@ S3_KEY_PREFIX = "results/bq1/"
 )
 
 def gold_analytics():
+
+    # Asegurar que el directorio existe al inicio
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
     sql_profiles = """
     CREATE OR REPLACE TABLE silver.tmp_gold_profiles_agg AS
@@ -253,24 +256,28 @@ def gold_analytics():
             )
 
         logging.info("Generando archivo HTML...")
-        # 4. Guardar a un buffer de texto (StringIO para HTML)
-        html_buffer = io.StringIO()
-        # include_plotlyjs='cdn' hace que el archivo sea más ligero al cargar la librería de internet
-        fig.write_html(html_buffer, include_plotlyjs='cdn', full_html=True)
-        html_buffer.seek(0)
+        # # 4. Guardar a un buffer de texto (StringIO para HTML)
+        # html_buffer = io.StringIO()
+        # # include_plotlyjs='cdn' hace que el archivo sea más ligero al cargar la librería de internet
+        # fig.write_html(html_buffer, include_plotlyjs='cdn', full_html=True)
+        # html_buffer.seek(0)
 
-        # 5. Subir a S3
-        s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
-        file_key = f"{S3_KEY_PREFIX}interactive_heatmap_h{target_hour}.html"
+        # # 5. Subir a S3
+        # s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+        # file_key = f"{S3_KEY_PREFIX}interactive_heatmap_h{target_hour}.html"
         
-        logging.info(f"Subiendo HTML a S3: s3://{S3_BUCKET}/{file_key}")
-        s3_hook.get_conn().put_object(
-            Body=html_buffer.getvalue(),
-            Bucket=S3_BUCKET,
-            Key=file_key,
-            ContentType='text/html'
-        )
-        logging.info("✅ Archivo HTML interactivo subido correctamente.")
+        # logging.info(f"Subiendo HTML a S3: s3://{S3_BUCKET}/{file_key}")
+        # s3_hook.get_conn().put_object(
+        #     Body=html_buffer.getvalue(),
+        #     Bucket=S3_BUCKET,
+        #     Key=file_key,
+        #     ContentType='text/html'
+        # )
+        # logging.info("✅ Archivo HTML interactivo subido correctamente.")
+
+        file_path = os.path.join(OUTPUT_FOLDER, f"interactive_heatmap_h{target_hour}.html")
+        fig.write_html(file_path, include_plotlyjs='cdn')
+        logging.info(f"✅ HTML guardado en: {file_path}")
 
     @task
     def cleanup():
@@ -279,7 +286,7 @@ def gold_analytics():
             con.execute("DROP TABLE IF EXISTS gold.typical_od_matrices;")
 
     @task
-    def plot_to_s3(**context):
+    def plot_to_local(**context):
         """
         Task: Fetch mobility patterns from Gold layer and upload plot to S3.
         """
@@ -327,26 +334,31 @@ def gold_analytics():
             
             plt.tight_layout()
 
-            # 4. Save Plot to Memory Buffer
-            img_buffer = io.BytesIO()
-            plt.savefig(img_buffer, format='png', dpi=300)
-            img_buffer.seek(0)
+            # # 4. Save Plot to Memory Buffer
+            # img_buffer = io.BytesIO()
+            # plt.savefig(img_buffer, format='png', dpi=300)
+            # img_buffer.seek(0)
 
-            # 5. Upload to Amazon S3
-            s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
-            file_key = f"{S3_KEY_PREFIX}mobility_report_{start_dt}_{end_dt}.png"
+            # # 5. Upload to Amazon S3
+            # s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+            # file_key = f"{S3_KEY_PREFIX}mobility_report_{start_dt}_{end_dt}.png"
             
-            logging.info(f"Uploading file to S3: s3://{S3_BUCKET}/{file_key}")
+            # logging.info(f"Uploading file to S3: s3://{S3_BUCKET}/{file_key}")
             
-            s3_hook.load_file_obj(
-                file_obj=img_buffer,
-                key=file_key,
-                bucket_name=S3_BUCKET,
-                replace=True
-            )
+            # s3_hook.load_file_obj(
+            #     file_obj=img_buffer,
+            #     key=file_key,
+            #     bucket_name=S3_BUCKET,
+            #     replace=True
+            # )
             
-            logging.info("✅ Plot successfully uploaded to S3.")
+            # logging.info("✅ Plot successfully uploaded to S3.")
+            # plt.close(fig)
+
+            file_path = os.path.join(OUTPUT_FOLDER, f"mobility_report_{start_dt}_{end_dt}.png")
+            plt.savefig(file_path, dpi=300)
             plt.close(fig)
+            logging.info(f"✅ Imagen guardada en: {file_path}")
 
         except Exception as e:
             logging.error(f"❌ Visualization failed: {str(e)}")
@@ -366,12 +378,12 @@ def gold_analytics():
         target_h = params['target_hour']
         
         # Define filenames
-        png_filename = f"mobility_report_{start_dt}_{end_dt}.png"
-        html_filename = f"interactive_heatmap_h{target_h}.html"
-        md_filename = f"report_BQ1_{start_dt}.md"
+        png_name = f"mobility_report_{start_dt}_{end_dt}.png"
+        html_name = f"interactive_heatmap_h{target_h}.html"
+        md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ1_{start_dt}.md")
         
         # S3 Public URL (or internal reference)
-        s3_base_url = f"https://{S3_BUCKET}.s3.eu-central-1.amazonaws.com/{S3_KEY_PREFIX}"
+        # s3_base_url = f"https://{S3_BUCKET}.s3.eu-central-1.amazonaws.com/{S3_KEY_PREFIX}"
 
         # Mejoramos el espaciado con saltos de línea extra (\n) para asegurar el renderizado
         markdown_content = f"""# Business Question 1: Typical Mobility Patterns (2023)
@@ -388,16 +400,16 @@ This report analyzes mobility patterns in Spain using MITMA and INE public data.
 ## 2. Mobility Pattern Visualization
 The **Gold layer** identified daily profiles via K-Means clustering.
 
-![Mobility Patterns Plot]({s3_base_url}{png_filename})
+![Mobility Patterns Plot]({png_name})
 
 *Figure 1: Mean hourly trips per cluster for the reference period.*
 
-        ---
+---
 
 ## 3. Interactive Origin-Destination Analysis
 Access the interactive tool for zone-to-zone flows here:
 
-👉 [**Open Interactive OD Matrix (HTML)**]({s3_base_url}{html_filename})
+👉 [**Open Interactive OD Matrix (HTML)**](./{html_name})
 
 ---
 ## 4. Technical Infrastructure
@@ -406,22 +418,25 @@ Access the interactive tool for zone-to-zone flows here:
 * **Storage:** DuckLake for ACID storage.
 """
 
-        s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
-        s3_client = s3_hook.get_conn()
+        # s3_hook = S3Hook(aws_conn_id='aws_s3_conn')
+        # s3_client = s3_hook.get_conn()
                 
-        s3_client.put_object(
-            Body=markdown_content,
-            Bucket=S3_BUCKET,
-            Key=f"{S3_KEY_PREFIX}{md_filename}",
-            ContentType='text/markdown'
-        )
+        # s3_client.put_object(
+        #     Body=markdown_content,
+        #     Bucket=S3_BUCKET,
+        #     Key=f"{S3_KEY_PREFIX}{md_filename}",
+        #     ContentType='text/markdown'
+        # )
                 
-        logging.info("✅ Markdown report successfully uploaded with public access.")
+        # logging.info("✅ Markdown report successfully uploaded with public access.")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+        logging.info(f"✅ Reporte Markdown generado en: {md_path}")
 
     # --- ORCHESTRATION ---
     proc = process_gold_patterns_locally()
     t_md = generate_report_markdown()
     
-    task_batch_profiles >> proc >> [plot_interactive_heatmap_html(), plot_to_s3()] >> t_md >> cleanup()
+    task_batch_profiles >> proc >> [plot_interactive_heatmap_html(), plot_to_local()] >> t_md >> cleanup()
 
 gold_analytics()
