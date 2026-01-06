@@ -13,3 +13,5 @@ shapely
 pyproj
 boto3
 keplergl
+plotly>=5.0.0
+numpy
