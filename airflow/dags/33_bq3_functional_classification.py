@@ -1,19 +1,16 @@
 from airflow.decorators import dag, task
 from airflow.models.param import Param
 from pendulum import datetime
-from utils_db import get_connection
+from utils_db import get_connection, run_batch_sql
 import logging
 import os
 import pandas as pd
 import json
-from keplergl import KeplerGl 
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.hooks.base import BaseHook
+from keplergl import KeplerGl
 
 # --- CONFIGURATION ---
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
-aws = BaseHook.get_connection("aws_s3_conn")
-S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
+OUTPUT_FOLDER = "include/results/bq3"
 
 @dag(
     dag_id="33_bq3_functional_classification",
@@ -35,128 +32,81 @@ S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
 )
 def bq3_functional_classification():
 
-    @task
-    def classify_zone_functions(**context):
-        """
-        Task: Functional Classification of Zones
-        Filtra por polígono y clasifica según flujos de entrada/salida.
-        """
-        params = context['params']
-        input_wkt = params['polygon_wkt']
-        sd_raw = str(params['start_date']) # "20230101"
-        ed_raw = str(params['end_date'])   # "20231231"
-        input_crs = params['input_crs']
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    
+    sql_classification = """
+    {% set input_crs = params.input_crs %}
+    {% set polygon_wkt = params.polygon_wkt %}
+    
+    {% if input_crs == 'EPSG:25830' %}
+        {% set filter_geom = "ST_GeomFromText('" ~ polygon_wkt ~ "')" %}
+    {% elif input_crs == 'OGC:CRS84' %}
+        {% set filter_geom = "ST_Transform(ST_GeomFromText('" ~ polygon_wkt ~ "'), 'OGC:CRS84', 'EPSG:25830')" %}
+    {% elif input_crs == 'EPSG:4326' %}
+        {% set filter_geom = "ST_Transform(ST_GeomFromText('" ~ polygon_wkt ~ "'), 'EPSG:4326', 'EPSG:25830')" %}
+    {% else %}
+        {% set filter_geom = "ST_GeomFromText('" ~ polygon_wkt ~ "')" %}
+    {% endif %}    
 
-        # Transformamos a formato YYYY-MM-DD (añadiendo los guiones)
-        start_date = f"{sd_raw[:4]}-{sd_raw[4:6]}-{sd_raw[6:]}"
-        end_date = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
 
-        # Construcción dinámica de la geometría de filtrado
-        if input_crs == "EPSG:25830":
-            # Caso 1: Ya está en el sistema de la capa Silver (metros)
-            filter_geom = f"ST_GeomFromText('{input_wkt}')"
-            
-        elif input_crs == "OGC:CRS84":
-            # Caso 2: Estándar GIS (Longitud, Latitud)
-            filter_geom = f"ST_Transform(ST_GeomFromText('{input_wkt}'), 'OGC:CRS84', 'EPSG:25830')"
-            
-        elif input_crs == "EPSG:4326":
-            # Caso 3: Estándar Geodésico (Latitud, Longitud)
-            filter_geom = f"ST_Transform(ST_GeomFromText('{input_wkt}'), 'EPSG:4326', 'EPSG:25830')"
+    CREATE OR REPLACE TABLE gold.zone_functional_classification AS
+    WITH selected_zones AS (
+        SELECT zone_id, zone_name, centroid, polygon
+        FROM silver.dim_zones
+        WHERE ST_Intersects({{ filter_geom }}, polygon)
+    ),
+    flat_flows AS (
+        SELECT f.origin_zone_id as zone_id, f.trips as outflow, 0 as inflow, 0 as internal
+        FROM silver.fact_mobility f
+        INNER JOIN selected_zones sz ON f.origin_zone_id = sz.zone_id
+        WHERE f.origin_zone_id != f.destination_zone_id
+            AND f.partition_date BETWEEN strptime('{{ params.start_date }}', '%Y%m%d')::DATE 
+                                 AND strptime('{{ params.end_date }}', '%Y%m%d')::DATE
         
-        logging.info(f"--- 🏷️ Filtrando por polígono: {input_wkt[:50]}... ---")
+        UNION ALL
+        
+        SELECT f.destination_zone_id as zone_id, 0 as outflow, f.trips as inflow, 0 as internal
+        FROM silver.fact_mobility f
+        INNER JOIN selected_zones sz ON f.destination_zone_id = sz.zone_id
+        WHERE f.origin_zone_id != f.destination_zone_id
+            AND f.partition_date BETWEEN strptime('{{ params.start_date }}', '%Y%m%d')::DATE 
+                                 AND strptime('{{ params.end_date }}', '%Y%m%d')::DATE
+        
+        UNION ALL
+        
+        SELECT f.origin_zone_id as zone_id, 0 as outflow, 0 as inflow, f.trips as internal
+        FROM silver.fact_mobility f
+        INNER JOIN selected_zones sz ON f.origin_zone_id = sz.zone_id
+        WHERE f.origin_zone_id = f.destination_zone_id
+            AND f.partition_date BETWEEN strptime('{{ params.start_date }}', '%Y%m%d')::DATE 
+                                 AND strptime('{{ params.end_date }}', '%Y%m%d')::DATE
+    ),
+    zone_flow_stats AS (
+        SELECT zone_id, SUM(internal) as internal_trips, SUM(outflow) as outflow, SUM(inflow) as inflow
+        FROM flat_flows
+        GROUP BY 1
+    )
+    SELECT 
+        m.zone_id, sz.zone_name, m.internal_trips, m.outflow, m.inflow,
+        CASE WHEN (m.inflow + m.outflow) = 0 THEN 0 ELSE (1.0 * m.inflow - m.outflow) / (m.inflow + m.outflow) END AS net_flow_ratio,
+        CASE WHEN (m.outflow + m.internal_trips) = 0 THEN 0 ELSE (1.0 * m.internal_trips) / (m.outflow + m.internal_trips) END AS retention_rate, 
+        CASE 
+            WHEN (1.0 * m.internal_trips / NULLIF(m.outflow + m.internal_trips, 0)) > 0.20 THEN 'Self-Sustaining Cell'
+            WHEN ((1.0 * m.inflow - m.outflow) / NULLIF(m.inflow + m.outflow, 0)) > 0.001 THEN 'Activity Hub (Importer)'
+            WHEN ((1.0 * m.inflow - m.outflow) / NULLIF(m.inflow + m.outflow, 0)) < -0.001 THEN 'Bedroom Community (Exporter)'
+            ELSE 'Balanced / Transit Zone'
+        END AS functional_label
+    FROM zone_flow_stats m
+    JOIN selected_zones sz ON m.zone_id = sz.zone_id
+    WHERE (m.internal_trips + m.inflow + m.outflow) > 0;
+    """
 
-        with get_connection() as con:
-            # La consulta utiliza un INNER JOIN con las zonas filtradas por el polígono
-            # para reducir el volumen de datos de movilidad procesados.
-            con.execute(f"""
-                CREATE OR REPLACE TABLE lakehouse.gold.zone_functional_classification AS
-                WITH 
-                -- 1. Identificar zonas dentro del polígono
-                selected_zones AS (
-                    SELECT zone_id, zone_name
-                    FROM lakehouse.silver.dim_zones
-                    WHERE ST_Intersects(polygon, {filter_geom})
-                ),
-
-                -- 2. Filtrar flujos de movilidad solo para esas zonas
-                flat_flows AS (
-                    SELECT f.origin_zone_id as zone_id, f.trips as outflow, 0 as inflow, 0 as internal
-                    FROM lakehouse.silver.fact_mobility f
-                    INNER JOIN selected_zones sz ON f.origin_zone_id = sz.zone_id
-                    WHERE f.origin_zone_id != f.destination_zone_id
-                        AND f.partition_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
-                    
-                    UNION ALL
-                    
-                    SELECT f.destination_zone_id as zone_id, 0 as outflow, f.trips as inflow, 0 as internal
-                    FROM lakehouse.silver.fact_mobility f
-                    INNER JOIN selected_zones sz ON f.destination_zone_id = sz.zone_id
-                    WHERE f.origin_zone_id != f.destination_zone_id
-                        AND f.partition_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
-                    
-                    UNION ALL
-                    
-                    SELECT f.origin_zone_id as zone_id, 0 as outflow, 0 as inflow, f.trips as internal
-                    FROM lakehouse.silver.fact_mobility f
-                    INNER JOIN selected_zones sz ON f.origin_zone_id = sz.zone_id
-                    WHERE f.origin_zone_id = f.destination_zone_id
-                        AND f.partition_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
-                ),
-
-                -- 3. Agregación de estadísticas por zona
-                zone_flow_stats AS (
-                    SELECT 
-                        zone_id,
-                        SUM(internal) as internal_trips,
-                        SUM(outflow) as outflow,
-                        SUM(inflow) as inflow
-                    FROM flat_flows
-                    GROUP BY 1
-                )
-
-                -- 4. Cálculo de métricas y etiquetas finales
-                SELECT 
-                    m.zone_id,
-                    sz.zone_name,
-                    m.internal_trips,
-                    m.outflow,
-                    m.inflow,
-                    
-                    -- Net Flow Ratio: (In - Out) / (In + Out)
-                    CASE 
-                        WHEN (m.inflow + m.outflow) = 0 THEN 0 
-                        ELSE (1.0 * m.inflow - m.outflow) / (m.inflow + m.outflow) 
-                    END AS net_flow_ratio,
-
-                    -- Retention Rate: Internal / (Out + Internal)
-                    CASE 
-                        WHEN (m.outflow + m.internal_trips) = 0 THEN 0
-                        ELSE (1.0 * m.internal_trips) / (m.outflow + m.internal_trips)
-                    END AS retention_rate, 
-
-                    -- Clasificación Final basada en los ratios calculados
-                    CASE 
-                        WHEN ((1.0 * m.internal_trips) / NULLIF(m.outflow + m.internal_trips, 0)) > 0.20 
-                            THEN 'Self-Sustaining Cell'
-                        
-                        -- 2. Importadores netos (Más gente entra de la que sale)
-                        WHEN ((1.0 * m.inflow - m.outflow) / NULLIF(m.inflow + m.outflow, 0)) > 0.001 
-                            THEN 'Activity Hub (Importer)'
-                        
-                        -- 3. Exportadores netos (Más gente sale de la que entra)
-                        WHEN ((1.0 * m.inflow - m.outflow) / NULLIF(m.inflow + m.outflow, 0)) < -0.001 
-                            THEN 'Bedroom Community (Exporter)'
-                        
-                        ELSE 'Balanced / Transit Zone'
-                    END AS functional_label
-                        
-                FROM zone_flow_stats m
-                JOIN selected_zones sz ON m.zone_id = sz.zone_id
-                WHERE (m.internal_trips + m.inflow + m.outflow) > 0;
-            """)
-
-        logging.info("✅ Gold: Tabla de clasificación funcional actualizada correctamente.")
+    task_batch_classification = run_batch_sql(
+        task_id="batch_classify_zones",
+        sql_query=sql_classification,
+        memory="12GB"
+    )
 
     @task
     def generate_kepler_map_bq3(**context):
@@ -296,25 +246,55 @@ def bq3_functional_classification():
         # --- GENERACIÓN Y SUBIDA A S3 (Estructura BQ3) ---
         map_bq3 = KeplerGl(height=800, data={dataset_name: df}, config=kepler_config)
         
-        local_path = f"/tmp/kepler_bq3_{run_id}.html"
-        map_bq3.save_to_html(file_name=local_path)
+        file_path = os.path.join(OUTPUT_FOLDER, "functional_classification_map.html")
+        map_bq3.save_to_html(file_name=file_path)
+        logging.info(f"✅ Kepler HTML saved to: {file_path}")
 
-        # Usamos el path resultados/bq3/ como pediste
-        s3_hook = S3Hook(aws_conn_id="aws_s3_conn")
-        s3_hook.load_file(
-            filename=local_path,
-            key=f"results/bq3/kepler_functional_{run_id}.html",
-            bucket_name=S3_BUCKET,
-            replace=True
-        )
+    @task
+    def generate_report_markdown(**context):
+        params = context['params']
+        sd_raw = params['start_date']
+        ed_raw = params['end_date']
+        start_readable = f"{sd_raw[:4]}-{sd_raw[4:6]}-{sd_raw[6:]}"
+        end_readable = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
+        md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ3_{sd_raw}.md")
         
-        os.remove(local_path)
-        logging.info(f"✅ Mapa BQ3 subido a S3 en results/bq3/kepler_functional_{run_id}.html")
+        markdown_content = f"""# Business Question 3: Functional Classification
+## 1. Execution Summary
+This analysis classifies zones based on their net mobility flows (Importers vs Exporters) and their retention capacity.
+
+* **Analysis Period:** {start_readable} to {end_readable}
+* **Spatial Filter:** `{params['polygon_wkt']}`
+
+---
+
+## 2. Functional Landscape
+We categorize zones into four functional types:
+1. **Self-Sustaining Cells:** High internal retention (>20% of trips stay within).
+2. **Activity Hubs (Importers):** Significant net inflow (Work/Commercial areas).
+3. **Bedroom Communities (Exporters):** Significant net outflow (Residential areas).
+4. **Balanced / Transit Zones:** Mixed use or transit corridors.
+
+### Interactive Spatial Analysis
+The following map shows the geographical distribution of these roles, where the black bubbles represent total activity (In + Out + Internal).
+
+👉 [**Open Functional Classification Map (HTML)**](./functional_classification_map.html)
+
+---
+## 3. Technical Specs
+* **Metrics:** Net Flow Ratio (In-Out Balance) and Retention Rate (Self-containment).
+* **Processing:** Batch SQL using DuckDB.
+* **Visualization:** Kepler.gl GeoJSON + Point layers.
+"""
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+        logging.info(f"✅ Markdown report generated at: {md_path}")
+
 
     # --- FLUJO DEL DAG ---
-    classification_task = classify_zone_functions()
+
     map_task = generate_kepler_map_bq3()
 
-    classification_task >> map_task
+    task_batch_classification >> map_task >> generate_report_markdown()
 
 bq3_functional_classification()
