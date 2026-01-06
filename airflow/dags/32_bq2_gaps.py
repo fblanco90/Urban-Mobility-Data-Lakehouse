@@ -1,6 +1,4 @@
 import os
-from airflow.hooks.base import BaseHook
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.sdk import dag, task, Param
 from pendulum import datetime
 import pandas as pd
@@ -9,10 +7,10 @@ from keplergl import KeplerGl
 from utils_db import get_connection, run_batch_sql
 
 
-DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
 
-aws = BaseHook.get_connection("aws_s3_conn")
-S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
+DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
+OUTPUT_FOLDER = "include/results/bq2"
+
 
 @dag(
     dag_id="32_bq2_gaps",
@@ -33,6 +31,9 @@ S3_BUCKET = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
     tags=['mobility', 'gold', 'analytics', 'aws_batch']
 )
 def gold_analytics():
+
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
     sql_gaps = """
         CREATE OR REPLACE TABLE gold.infrastructure_gaps AS
@@ -194,20 +195,9 @@ def gold_analytics():
         # 4. Creación del objeto Mapa
         map_1 = KeplerGl(height=800, data={"datos_ranking": df}, config=kepler_config)
 
-        # 5. Guardado Local y Subida a S3
-        local_path = f"/tmp/kepler_zones_{run_id}.html"
-        map_1.save_to_html(file_name=local_path)
-
-        s3_hook = S3Hook(aws_conn_id="aws_s3_conn")
-        s3_hook.load_file(
-            filename=local_path,
-            key=f"results/bq2/ranking_service_{run_id}.html",
-            bucket_name=S3_BUCKET,
-            replace=True
-        )
-        
-        os.remove(local_path)
-        logging.info("Mapa de Ranking Zonal subido exitosamente a S3.")
+        file_path = os.path.join(OUTPUT_FOLDER, "ranking_service_map.html")
+        map_1.save_to_html(file_name=file_path)
+        logging.info(f"✅ Ranking HTML saved to: {file_path}")
     
     @task
     def kepler_mobility(**context):
@@ -331,26 +321,58 @@ def gold_analytics():
             config=kepler_config  
         )
 
-        # Guardar y Subir
-        local_path = f"/tmp/kepler_map_{run_id}.html"
+        file_path = os.path.join(OUTPUT_FOLDER, "mobility_gaps_map.html")
+        map_1.save_to_html(file_name=file_path)
+        logging.info(f"✅ Mobility Gaps HTML saved to: {file_path}")
+    
+    @task
+    def generate_report_markdown(**context):
+        params = context['params']
+        sd_raw = params['start_date']
+        ed_raw = params['end_date']
+        start_readable = f"{sd_raw[:4]}-{sd_raw[4:6]}-{sd_raw[6:]}"
+        end_readable = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
         
-        # Guardamos el HTML
-        map_1.save_to_html(file_name=local_path)
-        aws = BaseHook.get_connection("aws_s3_conn")
-        s3 = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
+        md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ2_{sd_raw}.md")
+        
+        markdown_content = f"""# Business Question 2: Infrastructure Gaps & Mobility Potential
+## 1. Execution Summary
+This analysis identifies areas where current mobility flows do not match the expected potential based on population and income (Gravity Model).
 
-        s3_hook = S3Hook(aws_conn_id="aws_s3_conn")
-        s3_hook.load_file(
-            filename=local_path,
-            key=f"results/bq2/kepler_mobility_{run_id}.html",
-            bucket_name=s3,
-            replace=True
-        )
-        
-        os.remove(local_path)
-        logging.info("Mapa Kepler subido exitosamente a S3.")
+* **Period:** {start_readable} to {end_readable}
+* **Spatial Filter:** `{params['polygon_wkt']}`
+
+---
+
+## 2. Interactive Maps
+Detailed spatial analysis using Kepler.gl:
+
+### A. Zone Service Level Ranking
+Visualizes "Mismatch Ratio" vs "Zone Importance". 
+*   **Red zones:** Service level below potential (Infrastructure Gap).
+*   **Green zones:** Service level meets or exceeds potential.
+*   **Bubble Size:** Economic importance (Population * Rent).
+
+👉 [**Open Ranking Map (HTML)**](./ranking_service_map.html)
+
+### B. Inter-urban Mobility Gaps (Arc Map)
+Visualizes the OD flows between zones.
+*   **Arc Color:** Mismatch ratio (Red = Under-served flow).
+*   **Arc Thickness:** Volume of trips.
+
+👉 [**Open Mobility Gaps Map (HTML)**](./mobility_gaps_map.html)
+
+---
+## 3. Methodology
+1. **Gravity Model:** Calculated potential flow based on $P_o \cdot I_d / dist^2$.
+2. **Mismatch Ratio:** Observed Trips / Potential Trips.
+3. **Filtering:** Focused on significant flows (>10 trips) within the provided polygon.
+"""
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+        logging.info(f"✅ Markdown report generated: {md_path}")
 
     # Orchestration
-    task_batch_gaps >> [ranking_service(), kepler_mobility()]
+    task_batch_gaps >> [ranking_service(), kepler_mobility()] >> generate_report_markdown()
 
 gold_analytics()
