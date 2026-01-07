@@ -5,9 +5,10 @@
 2. [Repository Structure](#-repository-structure)
 3. [Methodology](#-methodology)
 4. [Setup & Installation](#-setup--installation)
-5. [Cloud Lakehouse Configuration](#️-cloud-lakehouse-configuration)
-6. [Verification](#-verification)
-7. [Data Pipelines (DAGs)](#️-data-pipelines-dags)
+5. [Visualization Dashboard](#-visualization-dashboard)
+6. [Cloud Lakehouse Configuration](#️-cloud-lakehouse-configuration)
+7. [Verification](#-verification)
+8. [Data Pipelines (DAGs)](#️-data-pipelines-dags)
 
 ## 👥 Authors
 
@@ -15,41 +16,11 @@
 *   **Fernando Blanco Membrives**
 *   **Joan Sánchez Verdú**
 
-
 **Date:** January 2026
 
-This project implements a **3-tier Data Lakehouse** (Bronze, Silver, Gold) designed to process and analyze public mobility data from the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE).
+This project implements a **3-tier Data Lakehouse** (Bronze, Silver, Gold) designed to process and analyze public mobility data from the Spanish Ministry of Transport (MITMA) and the National Statistics Institute (INE). 
 
-The infrastructure follows a Medallion Architecture, utilizing **DuckDB** for processing, **AWS S3** for storage, and **Neon (Postgres)** for metadata management.
-
-
-
-
-## 📂 Repository Structure
-
-```text
-.
-├── airflow/                    # Airflow Orchestration (Astro Project)
-│   ├── dags/                   # DAGs for ELT (Data fetched via HTTP) and utils
-│   └── requirements.txt        # Dependencies needed to run the DAGs
-├── data/                       # Local Data Storage (NOT tracked by Git)
-│   ├── raw/                    # Source files for notebook experimentation
-│   └── lakehouse/              # Local Bronze/Silver/Gold layers
-├── docs/                       # Project Documentation
-│   ├── diagrams/               # System architecture and ER diagrams
-│   ├── report/                 # Final project analysis report
-│   └── sprint_logs/            # Markdown logs for each sprint
-├── notebooks/                  # Jupyter Notebooks used for sprint iterations
-├── .gitignore                  # Git exclusion rules
-├── requirements.txt            # Dependencies for running the Notebooks locally
-└── README.md                   # Project overview
-
-```
-
-### 💡 Data Access Logic
-*   **Airflow DAGs:** These are designed for automation. They fetch data directly from official sources via **HTTP requests** and process them into the cloud infrastructure.
-*   **Notebooks:** These were used during the different **sprints** to prototype logic. They rely on the local `data/` folder and the root `requirements.txt`.
-
+The infrastructure follows a Medallion Architecture, utilizing **DuckDB** for processing, **AWS S3** for storage, and **Neon (Postgres)** for metadata management, with a **Streamlit** layer for interactive visualization.
 
 ## 📈 Methodology
 
@@ -58,9 +29,39 @@ This project follows an **Agile** methodology. We work in iterative sprints with
 Detailed documentation for each stage of development—including sprint goals, task breakdowns, assignments, and retrospective outcomes—can be found in the following directory:
 `docs/sprint_logs/` (e.g., `Sprint-1.md`, `Sprint-2.md`, etc.)
 
+## 📂 Repository Structure
+
+```text
+.
+├── airflow/                    # Airflow Orchestration (Astro Project)
+│   ├── dags/                   # DAGs for ELT, Gold transformations, and testing
+│   ├── include/                # Static assets and generated artifacts
+│   │   └── results/            # Outputs from Gold DAGs (PNG, HTML, MD)
+│   │       ├── bq1/            # Mobility Patterns results
+│   │       ├── bq2/            # Infrastructure Gaps results
+│   │       └── bq3/            # Functional Classification results
+│   └── requirements.txt        # Airflow-specific dependencies
+├── app/                        # Visualization Layer
+│   └── main.py                 # Streamlit application entry point
+├── data/                       # Local Data Storage (NOT tracked by Git)
+│   ├── raw/                    # Source files for experimentation
+│   └── lakehouse/              # Local Bronze/Silver/Gold layers
+├── docs/                       # Project Documentation
+├── notebooks/                  # Jupyter Notebooks for logic prototyping
+├── .gitignore                  # Git exclusion rules
+├── requirements.txt            # Dependencies for Notebooks and Streamlit App
+└── README.md                   # Project overview
+```
+
+### 💡 Data Access Logic
+*   **Airflow DAGs:** These are designed for automation. They fetch data directly from official sources via **HTTP requests** and process them into the cloud infrastructure.
+*   **Notebooks:** These were used during the different **sprints** to prototype logic. They rely on the local `data/` folder and the root `requirements.notebooks.txt`.
+*   **Streamlit Visualziation:** ``app/main.py`` is the entrypoint to visualize all the data generated by the DAGs. Results can also be found in ``airflow/include/results/bqX`` folder, being `X`the number of the use case.
+
 
 ## 🚀 Setup & Installation
-### Airflow Orchestration (Astro)
+
+### 1. Airflow Orchestration (Astro)
 The orchestration layer is managed via the **Astro CLI**.
 
 1. **Prerequisites:** Ensure **Docker Desktop** and **Astro CLI** are installed and running.
@@ -82,11 +83,24 @@ The orchestration layer is managed via the **Astro CLI**.
    ```bash
    astro dev stop
    ```
+7. **Access the UI**: Open `http://localhost:8080/`.
 
+### 2. Visualization Dashboard (Streamlit)
+The dashboard provides a professional interface to explore the results generated by the Gold Layer DAGs.
+
+1. **Install Dependencies**: From the **root** of the project, ensure your virtual environment is active and run:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **Run the Dashboard**:
+   ```bash
+   streamlit run app/main.py
+   ```
+3. **Access the UI**: The dashboard will open automatically at `http://localhost:8501/`.
 
 ## ☁️ Cloud Lakehouse Configuration
 
-To enable cloud storage, metadata management, and elastic compute, you must configure the following in the Airflow UI (**Admin -> Connections**) and your AWS Console.
+To enable cloud storage and elastic compute, configure the following in the Airflow UI (**Admin -> Connections**):
 
 ### Connection 1: AWS S3 (`aws_s3_conn`)
 *   **Conn Type:** `Amazon Web Services`
@@ -106,60 +120,31 @@ To enable cloud storage, metadata management, and elastic compute, you must conf
 *   **Host:** Your Neon hostname (e.g., `ep-winter-rain...aws.neon.tech`)
 *   **Schema/Database:** `neondb`
 *   **Login:** `neondb_owner`
-*   **Password:** Your Neon Password
+*   **Password:** Your_Neon_Password
 *   **Port:** `5432`
 
-### 🚀 AWS Batch Infrastructure (Elastic Compute)
-The project offloads heavy SQL transformations to **AWS Batch** to ensure high performance and avoid local memory issues. Ensure the following resources are created in your AWS Console (`eu-central-1`):
-
-1.  **Compute Environment:** 
-    *   **Name:** `DuckJobCompute` (or similar)
-    *   **Instance Types:** Memory-optimized (e.g., `r5.large`, `r5.xlarge`)
-    *   **Provisioning:** Spot instances are recommended for cost efficiency.
-2.  **Job Queue:**
-    *   **Name:** `DuckJobQueue`
-    *   **Priority:** 1
-3.  **Job Definition:**
-    *   **Name:** `DuckJobDefinition`
-    *   **Image:** `public.ecr.aws/p7o6v6h0/upv/duckrunner:latest`
-    *   **Resource Requests:** Minimum 2 vCPUs and 4GB-14GB RAM depending on task complexity.
-    *   **Job Role:** An IAM role with `AmazonS3FullAccess` and `CloudWatchLogsFullAccess`.
-    *   **Execution Role:** `ecsTaskExecutionRole` to allow pulling the image.
-
+### 🚀 AWS Batch Infrastructure
+Heavy SQL transformations are offloaded to **AWS Batch** using a custom `duckrunner` image to handle large datasets without local memory constraints.
 
 ## 🧪 Verification
 
-Before running the main pipelines, it is highly recommended to run the following test DAGs to ensure your environment is correctly configured.
-
-### 1. Local Connection Test (`00_connection_test`)
-This DAG verifies that your **local Airflow environment** can successfully retrieve credentials and communicate with both AWS S3 and the Neon Metadata Catalog. 
-
-*   **Action:** Triggers a local task that attempts to establish a connection using the defined hooks.
-*   **Success Indicator:** The task turns green, and the Airflow logs display a confirmation message: `✅ Connected`.
-
-### 2. AWS Batch & Infrastructure Test (`0_aws_batch_test`)
-This DAG performs a full end-to-end test of the **Cloud Infrastructure**. It verifies that Airflow can trigger a remote AWS Batch job, and that the remote instance can correctly access the storage and metadata layers using the provided environment variables.
-
-*   **Action:** Triggers a remote SQL command on an AWS instance that creates a temporary test table in the `gold` schema and immediately drops it.
-*   **What to expect:** 
-    1.  The task may stay in the `RUNNABLE` state for 1–3 minutes while AWS provisions a Spot instance.
-    2.  Once `RUNNING`, it executes the SQL using the `duckrunner` image.
-*   **Success Indicator:** 
-    1.  The Airflow task status turns to `SUCCEEDED`.
-    2.  The AWS CloudWatch logs (linked in the Airflow task details) show the message: `Finished executing the query`.
-
----
-
-**Note:** If `00_connection_test` succeeds but `0_aws_batch_test` fails, check your AWS IAM permissions (specifically `iam:PassRole`) and ensure your Job Definition names match exactly in both the AWS Console and the DAG code.
+Before running main pipelines, execute these test DAGs:
+1.  **`00_connection_test`**: Verifies local connectivity to AWS and Neon.
+2.  **`0_aws_batch_test`**: Verifies the remote execution environment on AWS Batch.
 
 ## ⚙️ Data Pipelines (DAGs)
 
-The orchestration logic is divided into specialized DAGs to ensure modularity, scalability, and ease of maintenance:
-
-*   **Infrastructure & Dimensions DAG:** Handles the ingestion of low-frequency static data (INE demographics, MITMA zoning, and Calendars). It establishes the schema foundations and builds the Bronze and Silver dimension tables.
-
-*   **Mobility Ingestion DAG:** A parameterized worker pipeline designed for high-volume processing. It accepts specific date ranges to ingest, clean, and transform daily mobility files (MITMA OD Matrices) from Bronze to Silver using atomic tasks.
-
-*   **Gold Generations and Consultings (DAGs 31–33):** These pipelines consolidate the analytical logic and reporting into unified flows. Triggered on-demand with custom parameters (e.g., specific spatial polygons or date ranges), they first materialize aggregated Gold tables using DuckDB and immediately generate final visual assets (Kepler.gl maps, Matplotlib charts), embedded in a markdown file.
+*   **Infrastructure & Dimensions:** Ingests static data (INE/MITMA dimensions) to build schema foundations.
+*   **Mobility Ingestion:** Parameterized worker pipeline for cleaning and transforming high-volume daily mobility files.
+*   **Gold Generations (DAGs 31–33):** Analytical pipelines that materialize aggregated Gold tables and generate visual assets (Kepler maps, PNGs) stored in `airflow/include/results/`. These files are automatically picked up by the Streamlit app.
 
 ---
+
+## 📊 Visualization Dashboard
+The Streamlit application is the primary consumption layer for business users. It features:
+*   **Interactive Sidebar:** Navigation between the three Business Questions (BQs).
+*   **Metadata Explorer:** Direct access to execution parameters (dates, polygons) extracted from the Airflow Markdown reports.
+*   **Multi-format Viewing:** Seamless rendering of Matplotlib plots, Plotly heatmaps, and high-density Kepler.gl maps.
+*   **Orchestration Shortcut:** A direct link button to the Airflow UI for real-time pipeline monitoring.
+
+**Note:** The Streamlit app relies on the artifacts generated by the Gold DAGs. If a view appears empty, ensure the corresponding DAG has been executed in Airflow.
