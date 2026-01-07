@@ -335,10 +335,7 @@ def gold_analytics():
         
         md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ2_{sd_raw}.md")
         
-        markdown_content = f"""# Business Question 2: Infrastructure Gaps & Mobility Potential
-## 1. Execution Summary
-This analysis identifies areas where current mobility flows do not match the expected potential based on population and income (Gravity Model).
-
+        markdown_content = f"""---
 * **Period:** {start_readable} to {end_readable}
 * **Spatial Filter:** `{params['polygon_wkt']}`
 
@@ -353,14 +350,10 @@ Visualizes "Mismatch Ratio" vs "Zone Importance".
 *   **Green zones:** Service level meets or exceeds potential.
 *   **Bubble Size:** Economic importance (Population * Rent).
 
-👉 [**Open Ranking Map (HTML)**](./ranking_service_map.html)
-
 ### B. Inter-urban Mobility Gaps (Arc Map)
 Visualizes the OD flows between zones.
 *   **Arc Color:** Mismatch ratio (Red = Under-served flow).
 *   **Arc Thickness:** Volume of trips.
-
-👉 [**Open Mobility Gaps Map (HTML)**](./mobility_gaps_map.html)
 
 ---
 ## 3. Methodology

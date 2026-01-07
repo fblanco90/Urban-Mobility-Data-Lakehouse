@@ -259,8 +259,8 @@ def bq3_functional_classification():
         end_readable = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
         md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ3_{sd_raw}.md")
         
-        markdown_content = f"""# Business Question 3: Functional Classification
-## 1. Execution Summary
+        markdown_content = f"""---
+## 1. Parameters
 This analysis classifies zones based on their net mobility flows (Importers vs Exporters) and their retention capacity.
 
 * **Analysis Period:** {start_readable} to {end_readable}
@@ -278,7 +278,6 @@ We categorize zones into four functional types:
 ### Interactive Spatial Analysis
 The following map shows the geographical distribution of these roles, where the black bubbles represent total activity (In + Out + Internal).
 
-👉 [**Open Functional Classification Map (HTML)**](./functional_classification_map.html)
 
 ---
 ## 3. Technical Specs

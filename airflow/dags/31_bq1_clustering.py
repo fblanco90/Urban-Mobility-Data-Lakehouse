@@ -351,9 +351,8 @@ def gold_analytics():
         html_name = f"interactive_heatmap.html"
         md_path = os.path.join(OUTPUT_FOLDER, f"report_BQ1.md")
         
-        markdown_content = f"""# Business Question 1: Typical Mobility Patterns (2023)
-
-## 1. Execution Summary
+        markdown_content = f"""--
+## 1. Parameters
 This report analyzes mobility patterns in Spain using MITMA and INE public data.
 
 * **Analysis Period:** {start_readable} to {end_readable}
@@ -365,16 +364,12 @@ This report analyzes mobility patterns in Spain using MITMA and INE public data.
 ## 2. Mobility Pattern Visualization
 The **Gold layer** identified daily profiles via K-Means clustering.
 
-![Mobility Patterns Plot]({png_name})
-
-*Figure 1: Mean hourly trips per cluster for the reference period.*
+*(Mean hourly trips per cluster for the reference period)*
 
 ---
 
 ## 3. Interactive Origin-Destination Analysis
 Access the interactive tool for zone-to-zone flows here:
-
-👉 [**Open Interactive OD Matrix (HTML)**](./{html_name})
 
 ---
 ## 4. Technical Infrastructure
