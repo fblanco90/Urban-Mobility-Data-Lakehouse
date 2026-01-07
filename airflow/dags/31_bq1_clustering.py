@@ -1,22 +1,15 @@
-import io
 import os
 import logging
-import pandas as pd
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-import seaborn as sns
+matplotlib.use('Agg')
 import plotly.graph_objects as go
 from airflow.sdk import dag, task, Param
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.hooks.base import BaseHook
 from pendulum import datetime
 from utils_db import get_connection, run_batch_sql
 
-# from sklearn.cluster import KMeans
-# from matplotlib.colors import LogNorm
 
-matplotlib.use('Agg') 
 
 OUTPUT_FOLDER = "include/results/bq1"
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
@@ -347,8 +340,10 @@ def gold_analytics():
         Uses the underlying boto3 client to avoid 'mimetype' keyword errors.
         """
         params = context['params']
-        start_dt = params['start_date']
-        end_dt = params['end_date']
+        sd_raw = params['start_date']
+        ed_raw = params['end_date']
+        start_readable = f"{sd_raw[:4]}-{sd_raw[4:6]}-{sd_raw[6:]}"
+        end_readable = f"{ed_raw[:4]}-{ed_raw[4:6]}-{ed_raw[6:]}"
         target_h = params['target_hour']
         
         # Define filenames
@@ -361,7 +356,7 @@ def gold_analytics():
 ## 1. Execution Summary
 This report analyzes mobility patterns in Spain using MITMA and INE public data.
 
-* **Analysis Period:** {start_dt} to {end_dt}
+* **Analysis Period:** {start_readable} to {end_readable}
 * **Target Hour:** {target_h}:00h
 * **Spatial Filter:** `{params['polygon_wkt']}`
 
