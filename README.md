@@ -50,7 +50,7 @@ Detailed documentation for each stage of development—including sprint goals, t
 ├── docs/                       # Project Documentation
 ├── notebooks/                  # Jupyter Notebooks for logic prototyping
 ├── .gitignore                  # Git exclusion rules
-├── requirements.txt            # Dependencies for Notebooks and Streamlit App
+├── requirements.txt            # Dependencies for Streamlit App
 └── README.md                   # Project overview
 ```
 
