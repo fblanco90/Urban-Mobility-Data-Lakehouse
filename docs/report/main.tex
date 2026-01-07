@@ -16,6 +16,7 @@
 \usepackage{parskip}      % Space between paragraphs
 \usepackage{amsmath}
 \usepackage{pdflscape}
+\usepackage{subcaption}
 
 
 % --- CODE SNIPPET STYLING ---
@@ -521,6 +522,30 @@ The analytical layer is materialized through three dedicated Airflow pipelines. 
         \item \textbf{Output:} The DAG produces a comprehensive reporting suite in the results directory, including a static Matplotlib chart for temporal profiles, an interactive Plotly HTML heatmap for detailed OD analysis, and a summary Markdown report.
     \end{itemize}
 
+    \begin{figure}[H]
+        \centering
+        % First Image (Line Chart)
+        \begin{subfigure}[b]{0.8\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{imgs/bq1-1}
+            \caption{Temporal mobility profiles (Clustering results)}
+            \label{fig:bq1_profiles}
+        \end{subfigure}
+        
+        \vspace{0.5cm} % Add some vertical space between them
+
+        % Second Image (Heatmap)
+        \begin{subfigure}[b]{1\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{imgs/bq1-2}
+            \caption{Interactive Origin-Destination Heatmap}
+            \label{fig:bq1_heatmap}
+        \end{subfigure}
+        
+        \caption{Visualization results for BQ1: Typical Daily Mobility Patterns.}
+        \label{fig:bq1_results}
+    \end{figure}
+
     \item \textbf{DAG 32: Infrastructure Gap Analysis (\texttt{32\_bq2\_gaps})} \\
     This pipeline implements a Gravity Model to quantify the disparity between theoretical potential and actual mobility.
     \begin{itemize}
@@ -528,12 +553,44 @@ The analytical layer is materialized through three dedicated Airflow pipelines. 
         \item \textbf{Output:} The DAG utilizes Kepler.gl to generate two interactive geospatial reports: a \textit{Service Level Ranking} (bubble map) identifying underserved zones and a \textit{Mobility Gaps} visualization (arc map) showing specific connections where demand exceeds supply, alongside a summary Markdown report.
     \end{itemize}
 
+    \begin{figure}[H]
+        \centering
+        % First Image (Ranking Map)
+        \begin{subfigure}[b]{1.0\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{imgs/bq2-1}
+            \caption{Zone Service Level Ranking}
+            \label{fig:bq2_ranking}
+        \end{subfigure}
+
+        \vspace{0.5cm}
+
+        % Second Image (Arc Map)
+        \begin{subfigure}[b]{1.0\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{imgs/bq2-2}
+            \caption{Inter-urban Mobility Gaps (Arc Map)}
+            \label{fig:bq2_arcs}
+        \end{subfigure}
+        
+        \caption{Visualization results for BQ2: Infrastructure Gaps and Mobility Potential.}
+        \label{fig:bq2_results}
+    \end{figure}
+
     \item \textbf{DAG 33: Functional Classification (\texttt{33\_bq3\_functional\_classification})} \\
     This pipeline categorizes municipalities based on their role in the metropolitan network (e.g., residential vs. commercial hubs).
     \begin{itemize}
         \item \textbf{Transformation:} It calculates critical flow metrics (inflow/outflow ratios and retention rates) via a SQL batch job. A logic-based decision tree assigns a functional label (e.g., ``Bedroom Community'', ``Activity Hub'') to each zone, persisting the results in \texttt{gold.zone\_functional\_classification}.
         \item \textbf{Output:} The DAG generates a Kepler.gl Choropleth map that colors zone geometries by their functional role and overlays an activity intensity layer (bubbles). This interactive dashboard, accompanied by a Markdown summary, allows urban planners to visualize the structural hierarchy of the region.
     \end{itemize}
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=1\textwidth]{imgs/bq3-1}
+        \caption{BQ3 Results: Functional Zone Classification based on net flows and retention rates.}
+        \label{fig:bq3_results}
+    \end{figure}
+
 \end{itemize}
 
 
@@ -670,6 +727,10 @@ Despite the success of the architecture, several limitations were identified dur
     \item \textbf{Latency and Real-Time Analysis:} The current architecture is designed for $T+1$ (Daily) batch processing. Due to the provisioning time of AWS Batch instances and the file-based ingestion nature of the source, this system is not suitable for real-time traffic monitoring. Use cases requiring sub-minute latency (e.g., immediate accident detection or live congestion management) would require a Streaming architecture (e.g., Kafka + Flink) rather than the current Lakehouse approach.
 \end{itemize}
 
+
+
+
+
 % --- BIBLIOGRAPHY ---
 \begin{thebibliography}{9}
 
@@ -718,10 +779,6 @@ Apache Software Foundation.
 Available at: \url{https://airflow.apache.org/}
 (Accessed on 4 January 2026).
 
-
-
-
 \end{thebibliography}
-
 
 \end{document}
