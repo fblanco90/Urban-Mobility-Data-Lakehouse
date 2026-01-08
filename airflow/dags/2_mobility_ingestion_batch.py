@@ -24,7 +24,13 @@ BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-mu
 def mobility_ingestion_batch():
 
     @task
-    def get_valid_dates(**context):
+    def get_valid_dates(**context: Any) -> list[str]:
+        """
+        Generates a sequence of dates within a specified range and verifies the 
+        availability of corresponding remote resources via HTTP HEAD requests. 
+        It returns a filtered list containing only the dates for which a valid 
+        data file exists at the source.
+        """
         params = context["params"]
         all_dates = [
             d.strftime("%Y%m%d")
@@ -101,7 +107,13 @@ def mobility_ingestion_batch():
             logging.info("✅ Table initialization complete.")
 
     @task
-    def prepare_batch_configs(date_list, layer="bronze"):
+    def prepare_batch_configs(date_list: list[str], layer: str = "bronze") -> list[dict[str, Any]]:
+        """
+        Generates a list of environment configurations for batch processing tasks in 
+        the bronze or silver layers. It constructs idempotent SQL queries—handling 
+        either raw CSV ingestion or complex medallion transformations—and bundles 
+        them with database credentials and S3 storage metadata for external execution.
+        """
         neon = BaseHook.get_connection("neon_catalog_conn")
         aws = BaseHook.get_connection("aws_s3_conn")
         s3_bucket = aws.extra_dejson.get("bucket_name", "ducklake-dbproject")
