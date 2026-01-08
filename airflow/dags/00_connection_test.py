@@ -1,8 +1,6 @@
 from airflow.sdk import dag, task
 from pendulum import datetime
 from utils_db import get_connection
-import pandas as pd
-from pyspainmobility import Zones
 import logging
 
 
@@ -16,14 +14,15 @@ import logging
 def connection_test():
 
     @task
-    def test():
-        """Creates Bronze, Silver, Gold schemas if they don't exist."""
-        con = get_connection()
-        
-        logging.info("✅ Connected.")
+    def test() -> None:
+        """
+        Verifies the database connection integrity by attempting to establish 
+        a session through the connection manager and logging a success message.
+        """
+        with get_connection() as con:
+            logging.info("✅ Connected.")
+        logging.info("✅ Connection verified.")
 
-        con.close()
-    
     init = test()
     init
 
