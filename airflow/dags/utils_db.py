@@ -1,7 +1,6 @@
 import duckdb
 import os
 import logging
-from airflow.providers.amazon.aws.operators.batch import BatchOperator
 from airflow.sdk.bases.hook import BaseHook
 
 def get_connection():
@@ -38,7 +37,6 @@ def get_connection():
 
     else:
         logging.info("💻 Detected Local Environment (Airflow/Astro)")
-        from airflow.sdk.bases.hook import BaseHook
         
         aws = BaseHook.get_connection("aws_s3_conn")
         neon = BaseHook.get_connection("neon_catalog_conn")
@@ -92,6 +90,9 @@ def run_batch_sql(task_id, sql_query, memory="16GB", vcpu=2):
     """
     Standardizes the creation of BatchOperators for the duckrunner image.
     """
+
+    from airflow.providers.amazon.aws.operators.batch import BatchOperator
+
     neon = BaseHook.get_connection("neon_catalog_conn")
     aws = BaseHook.get_connection("aws_s3_conn")
     s3_bucket = aws.extra_dejson.get('bucket_name', 'ducklake-dbproject')
