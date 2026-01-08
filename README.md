@@ -136,7 +136,7 @@ Before running main pipelines, execute these test DAGs:
 ## Data Pipelines (DAGs)
 
 *   **Infrastructure & Dimensions:** Ingests static data (INE/MITMA dimensions) to build schema foundations.
-*   **Mobility Ingestion:** Parameterized worker pipeline for cleaning and transforming high-volume daily mobility files.
+*   **Mobility Ingestion:** Parameterized worker pipeline for cleaning and transforming high-volume daily mobility files. It exists 2 versions: `_local`, which executes all the logic locally, and `_batch`. which executes the same logic but in AWS batch.
 *   **Gold Generations (DAGs 31–33):** Analytical pipelines that materialize aggregated Gold tables and generate visual assets (Kepler maps, PNGs) stored in `airflow/include/results/`. These files are automatically picked up by the Streamlit app.
 
 ---
