@@ -1,11 +1,9 @@
 import os
+import logging
+from typing import Any
 from airflow.sdk import dag, task, Param
 from pendulum import datetime
-import pandas as pd
-import logging
-from keplergl import KeplerGl
 from utils_db import get_connection, run_batch_sql
-
 
 
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
@@ -30,7 +28,7 @@ OUTPUT_FOLDER = "include/results/bq2"
     },
     tags=['mobility', 'gold', 'analytics', 'aws_batch']
 )
-def gold_analytics():
+def bq2_gaps():
 
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -81,10 +79,22 @@ def gold_analytics():
     )
 
     @task
-    def ranking_service(**context):
+    def ranking_service(**context: Any) -> None:
+        """
+        Analyzes and visualizes infrastructure service levels across geographic zones by 
+        intersecting a provided spatial polygon with demographic and performance data. 
+        It calculates a weighted average service level and a zone importance score 
+        (based on population and rent), generating an interactive Kepler.gl map where 
+        color and point radius encode these specific analytical metrics.
+        """
+
+        import warnings
+        warnings.filterwarnings("ignore", category=UserWarning, module="keplergl")
+        
+        import pandas as pd
+        from keplergl import KeplerGl
 
         params = context['params']
-        run_id = context['run_id']
         polygon_wkt = params['polygon_wkt']
         input_crs = params['input_crs']
 
@@ -130,9 +140,6 @@ def gold_analytics():
         
         df = df.dropna(subset=["avg_service_level", "zone_importance"])
                 
-        # DEBUG: Mira esto en los logs de Airflow
-        logging.info(f"DATOS PARA EL MAPA:\n{df[['zone_name', 'avg_service_level', 'zone_importance']].head(10)}")
-
         # Aseguramos que las columnas sean números reales
         df["avg_service_level"] = pd.to_numeric(df["avg_service_level"], errors="coerce")
         df["zone_importance"] = pd.to_numeric(df["zone_importance"], errors="coerce")
@@ -200,7 +207,21 @@ def gold_analytics():
         logging.info(f"✅ Ranking HTML saved to: {file_path}")
     
     @task
-    def kepler_mobility(**context):
+    def kepler_mobility(**context: Any) -> None:
+        """
+        Generates an interactive geospatial visualization using Kepler.gl to analyze 
+        mobility flows and infrastructure gaps within a specified region. It transforms 
+        spatial coordinates from the gold and silver layers, filters data based on a 
+        user-defined polygon, and renders origin-destination arcs where color and 
+        thickness represent mismatch ratios and trip volumes respectively.
+        """
+
+        import warnings
+        warnings.filterwarnings("ignore", category=UserWarning, module="keplergl")
+
+        import pandas as pd
+        from keplergl import KeplerGl
+
         params = context['params']
         run_id = context['run_id']
         polygon_wkt = params['polygon_wkt']
@@ -326,7 +347,13 @@ def gold_analytics():
         logging.info(f"✅ Mobility Gaps HTML saved to: {file_path}")
     
     @task
-    def generate_report_markdown(**context):
+    def generate_report_markdown(**context: Any) -> None:
+        """
+        Generates a structured Markdown report that summarizes mobility infrastructure 
+        analysis results. It documents the study period and spatial filters, explains 
+        the visualization logic for interactive Kepler.gl maps, and details the 
+        mathematical methodology used to calculate service levels and potential flows.
+        """
         params = context['params']
         sd_raw = params['start_date']
         ed_raw = params['end_date']
@@ -368,4 +395,4 @@ Visualizes the OD flows between zones.
     # Orchestration
     task_batch_gaps >> [ranking_service(), kepler_mobility()] >> generate_report_markdown()
 
-gold_analytics()
+bq2_gaps()

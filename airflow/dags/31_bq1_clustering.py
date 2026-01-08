@@ -1,10 +1,11 @@
 import os
 import logging
+from typing import Any
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-matplotlib.use('Agg')
 import plotly.graph_objects as go
+matplotlib.use('Agg')
 from airflow.sdk import dag, task, Param
 from pendulum import datetime
 from utils_db import get_connection, run_batch_sql
@@ -34,7 +35,7 @@ DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 7150
     tags=['mobility', 'gold', 'analytics', 'aws_batch']
 )
 
-def gold_analytics():
+def bq1_clustering():
 
     # Asegurar que el directorio existe al inicio
     if not os.path.exists(OUTPUT_FOLDER):
@@ -95,7 +96,14 @@ def gold_analytics():
     )
 
     @task
-    def process_gold_patterns_locally():
+    def process_gold_patterns_locally() -> None:
+        """
+        Identifies typical mobility patterns by applying K-Means clustering to daily 
+        hourly trip profiles. It aggregates and normalizes temporal data from the 
+        silver layer to group similar days, then calculates representative hourly 
+        averages and Origin-Destination matrices for each cluster, persisting the 
+        final patterns into the gold layer.
+        """
         from sklearn.cluster import KMeans
         import pandas as pd
         
@@ -142,11 +150,12 @@ def gold_analytics():
             con.execute("CREATE OR REPLACE TABLE lakehouse.gold.typical_od_matrices AS SELECT * FROM tmp_od")
 
     @task
-    def plot_interactive_heatmap_html(**context):
+    def plot_interactive_heatmap_html(**context: Any) -> None:
         """
-        Genera un único archivo HTML interactivo con un desplegable para seleccionar
-        el heatmap del clúster deseado para una hora específica.
-        Requiere la librería 'plotly' instalada en el entorno.
+        Generates an interactive HTML dashboard containing Origin-Destination (OD) heatmaps 
+        for a specific hour. It extracts typical mobility matrices from the gold layer, 
+        applies logarithmic scaling for better visualization of trip intensities, and 
+        incorporates a dropdown menu to switch between different cluster patterns.
         """
         target_hour = context['params']['target_hour']
         
@@ -268,15 +277,23 @@ def gold_analytics():
         logging.info(f"✅ HTML guardado en: {file_path}")
 
     @task
-    def cleanup():
+    def cleanup() -> None:
+        """
+        Cleans up the database environment by dropping temporary and intermediate 
+        tables in the silver and gold layers that were used during the data 
+        processing and pattern generation phases.
+        """
         with get_connection() as con:            
             con.execute("DROP TABLE IF EXISTS lakehouse.silver.tmp_gold_profiles_agg;")
             con.execute("DROP TABLE IF EXISTS lakehouse.gold.typical_od_matrices;")
 
     @task
-    def plot_to_local(**context):
+    def plot_to_local(**context: Any) -> None:
         """
-        Task: Fetch mobility patterns from Gold layer and upload plot to S3.
+        Generates a line chart visualization of daily mobility patterns by fetching 
+        aggregated profile data from the gold layer. It processes temporal trends 
+        across different mobility clusters and saves the resulting plot as a PNG 
+        file locally for reporting and analysis.
         """
         logging.info("--- 🎨 Generating Visualization for S3 ---")
         
@@ -334,10 +351,12 @@ def gold_analytics():
             con.close()
 
     @task
-    def generate_report_markdown(**context):
+    def generate_report_markdown(**context: Any) -> None:
         """
-        Generates a Markdown report in S3 summarizing BQ1 results.
-        Uses the underlying boto3 client to avoid 'mimetype' keyword errors.
+        Generates a summary report in Markdown format that documents the mobility 
+        analysis parameters and findings. It formats metadata from the task context, 
+        including time ranges and spatial filters, to provide a structured overview 
+        of the analytical process and infrastructure.
         """
         params = context['params']
         sd_raw = params['start_date']
@@ -388,4 +407,4 @@ Access the interactive tool for zone-to-zone flows here:
     
     task_batch_profiles >> proc >> [plot_interactive_heatmap_html(), plot_to_local()] >> t_md >> cleanup()
 
-gold_analytics()
+bq1_clustering()

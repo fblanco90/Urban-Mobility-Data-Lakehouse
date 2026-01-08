@@ -1,12 +1,10 @@
-from airflow.decorators import dag, task
-from airflow.models.param import Param
+import os
+import logging
+from typing import Any
+from airflow.sdk import dag, task, Param
 from pendulum import datetime
 from utils_db import get_connection, run_batch_sql
-import logging
-import os
-import pandas as pd
-import json
-from keplergl import KeplerGl
+
 
 # --- CONFIGURATION ---
 DEFAULT_POLYGON = "POLYGON((715000 4365000, 735000 4365000, 735000 4385000, 715000 4385000, 715000 4365000))"
@@ -109,10 +107,22 @@ def bq3_functional_classification():
     )
 
     @task
-    def generate_kepler_map_bq3(**context):
+    def generate_kepler_map_bq3(**context: Any) -> None:
         """
-        Genera un mapa interactivo en Kepler.gl para la Clasificación Funcional (BQ3).
+        Generates an interactive Kepler.gl map to visualize the functional classification of 
+        geographic zones based on their mobility profiles. It retrieves classification 
+        metrics and spatial geometries from the lakehouse, performs data cleaning, and 
+        renders layers that highlight zone roles (e.g., Activity Hub, Bedroom Community) 
+        and total activity levels, saving the result as an HTML dashboard.
         """
+       
+        import warnings
+        warnings.filterwarnings("ignore", category=UserWarning, module="keplergl")
+
+        import pandas as pd
+        import json
+        from keplergl import KeplerGl
+
         params = context['params']
         run_id = context['run_id']
         
@@ -251,7 +261,15 @@ def bq3_functional_classification():
         logging.info(f"✅ Kepler HTML saved to: {file_path}")
 
     @task
-    def generate_report_markdown(**context):
+    def generate_report_markdown(**context: Any) -> None:
+        """
+        Generates a structured Markdown report summarizing the functional zone 
+        classification analysis. It documents the study period, spatial filters, and 
+        definitions for classified roles—such as Activity Hubs and Bedroom 
+        Communities—while providing technical details on the underlying metrics 
+        and data processing engine.
+        """
+
         params = context['params']
         sd_raw = params['start_date']
         ed_raw = params['end_date']
@@ -293,7 +311,8 @@ The following map shows the geographical distribution of these roles, where the 
     # --- FLUJO DEL DAG ---
 
     map_task = generate_kepler_map_bq3()
+    task_md_report = generate_report_markdown()
 
-    task_batch_classification >> map_task >> generate_report_markdown()
+    task_batch_classification >> map_task >> task_md_report
 
 bq3_functional_classification()

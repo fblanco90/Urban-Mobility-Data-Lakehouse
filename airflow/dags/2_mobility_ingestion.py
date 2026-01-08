@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import logging
+from typing import Any
 import requests
 import pandas as pd
 from airflow.sdk import dag, task, Param
@@ -12,7 +13,6 @@ BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-mu
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
-    # max_active_tasks=2,
     params={
         "start_date": Param("20230101", type="string", description="YYYYMMDD"),
         "end_date": Param("20230101", type="string", description="YYYYMMDD"),
@@ -22,8 +22,12 @@ BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-mu
 def mobility_ingestion():
 
     @task
-    def generate_date_list(**context):
-        """Generates list of YYYYMMDD strings."""
+    def generate_date_list(**context: Any) -> list[str]:
+        """
+        Generates a list of date strings formatted as 'YYYYMMDD' within a range 
+        defined by start and end dates. It prioritizes input from the Airflow DAG 
+        run configuration, falling back to default parameters if necessary.
+        """
         conf = context['dag_run'].conf or {}
         params = context['params']
         start = conf.get('start_date') or params['start_date']
@@ -32,7 +36,13 @@ def mobility_ingestion():
         return [d.strftime("%Y%m%d") for d in pd.date_range(start=start, end=end)]
 
     @task
-    def ensure_br_mobility_table_exists(**context):
+    def ensure_br_mobility_table_exists(**context: Any) -> None:
+        """
+        Ensures the structural integrity of the mobility data table in the bronze 
+        layer by initializing its schema from a remote source if it does not exist. 
+        It incorporates ingestion metadata and attempts to establish a 
+        partitioning strategy by date.
+        """
         logging.info("🛠 Checking/Creating Table Structures.")
 
         conf = context['dag_run'].conf or {}
@@ -65,11 +75,17 @@ def mobility_ingestion():
         retry_delay=timedelta(seconds=30),
         map_index_template="{{ task.op_kwargs['date_str'] }}"
     )
-    def br_process_single_day(date_str: str):
+    def br_process_single_day(date_str: str) -> str | None:
+        """
+        Orchestrates the ingestion of mobility data for a specific date into the 
+        bronze layer. It validates remote file availability, maintains idempotency 
+        by purging existing records for the target date, and performs a bulk insert 
+        from the source CSV enriched with ingestion metadata.
+        """
 
         # Input: "20230101"
-        year = date_str[:4]    # "2023"
-        month = date_str[4:6]  # "01"
+        year = date_str[:4]
+        month = date_str[4:6]
         url = BASE_URL_TEMPLATE.format(year=year, month=month, date=date_str)
         logging.info(f"Target URL: {url}")
 
@@ -107,7 +123,13 @@ def mobility_ingestion():
         logging.info(f"✅ Bronze: {b_count} rows ingested.")
 
     @task
-    def ensure_sl_mobility_table_exists(**context):
+    def ensure_sl_mobility_table_exists(**context: Any) -> None:
+        """
+        Ensures the existence and structural configuration of the mobility fact table 
+        within the silver layer. It initializes the table schema for storing trip 
+        metrics and attempts to establish a partitioning strategy based on the 
+        partition date to optimize downstream queries.
+        """
         logging.info("🛠 Checking/Creating Table Structures.")
 
         # 1. Get a sample URL (using start_date) to infer Bronze Schema
@@ -144,11 +166,17 @@ def mobility_ingestion():
         retry_delay=timedelta(seconds=30), 
         map_index_template="{{ task.op_kwargs['date_str'] }}"
     )
-    def sl_process_single_day(date_str: str):
+    def sl_process_single_day(date_str: str) -> str | None:
+        """
+        Transforms mobility data for a specific date from the bronze layer into the 
+        silver fact table. It performs spatial dimension joins, calculates precise 
+        temporal periods, and maintains data consistency through idempotent 
+        deletion of existing records for the target partition.
+        """
 
         # Input: "20230101"
-        year = date_str[:4]    # "2023"
-        month = date_str[4:6]  # "01"
+        year = date_str[:4]
+        month = date_str[4:6]
         url = BASE_URL_TEMPLATE.format(year=year, month=month, date=date_str)
         logging.info(f"Target URL: {url}")
         
