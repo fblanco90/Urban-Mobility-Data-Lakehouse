@@ -1,5 +1,5 @@
 from datetime import timedelta
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 from utils_db import get_connection
 import logging
 import requests
@@ -452,6 +452,45 @@ def infrastructure_and_dimensions():
                 WHERE a.zone_id != b.zone_id;
             """)
 
+    @task
+    def audit_dimensions():
+        logging.info("🕵️ Starting Data Quality Audit for Dimensions.")
+
+        # Helper to insert into log
+        def log_metric(table, metric, value, notes=''):
+            safe_val = value if value is not None else 0.0
+            query = f"""
+                INSERT INTO lakehouse.silver.data_quality_log 
+                VALUES (CURRENT_TIMESTAMP, '{table}', '{metric}', {safe_val}, '{notes}')
+            """
+            con.execute(query)
+            logging.info(f"   -> Audited {table}: {metric} = {safe_val}")
+
+        with get_connection() as con:
+            # 1. Zone Checks
+            missing_ine = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones WHERE ine_code IS NULL").fetchone()[0]
+            log_metric('dim_zones', 'zones_missing_ine_code', missing_ine)
+
+            missing_geo = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones WHERE polygon IS NULL").fetchone()[0]
+            log_metric('dim_zones', 'zones_missing_geo_coords', missing_geo)
+            
+            zone_count = con.execute("SELECT COUNT(*) FROM lakehouse.silver.dim_zones").fetchone()[0]
+            log_metric('dim_zones', 'total_zones', zone_count)
+
+            # 2. Population Checks
+            pop_sum = con.execute("SELECT SUM(population) FROM lakehouse.silver.metric_population").fetchone()[0]
+            log_metric('metric_population', 'total_population_sum', pop_sum, 'Spain Total')
+
+            avg_rent = con.execute("SELECT AVG(income_per_capita) FROM lakehouse.silver.metric_ine_rent").fetchone()[0]
+            log_metric('metric_ine_rent', 'avg_income_per_capita', avg_rent, 'National Avg')
+            
+            rent_coverage = con.execute("""
+                SELECT (SELECT COUNT(DISTINCT zone_id) FROM lakehouse.silver.metric_ine_rent) * 100.0 / NULLIF((SELECT COUNT(*) FROM lakehouse.silver.dim_zones), 0)
+            """).fetchone()[0]
+            log_metric('metric_ine_rent', 'income_data_coverage_pct', rent_coverage)
+        
+        logging.info("🕵️ Dimensions audited.")
+
     # ==============================================================================
     # ORCHESTRATION FLOW
     # ==============================================================================
@@ -474,6 +513,9 @@ def infrastructure_and_dimensions():
     task_metric_rent = sl_ingest_metric_ine_rent()
     task_dim_holidays = sl_ingest_dim_zone_holidays()
 
+    # Audit
+    task_audit = audit_dimensions()
+
     # Dependencies
     task_schemas >> [
         task_stats,
@@ -495,5 +537,7 @@ def infrastructure_and_dimensions():
 
     task_dim_zones >> task_dim_holidays
     task_calendars >> task_dim_holidays
+
+    [task_metric_rent, task_dim_zones_distances, task_metric_pop, task_dim_holidays] >> task_audit
 
 infrastructure_and_dimensions()
