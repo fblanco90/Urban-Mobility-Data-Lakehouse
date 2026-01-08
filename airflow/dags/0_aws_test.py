@@ -7,7 +7,7 @@ from utils_db import run_batch_sql
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
-    tags=['mobility', 'aws_batch', 'test']
+    tags=['test', 'local']
 )
 def aws_batch_test():
 

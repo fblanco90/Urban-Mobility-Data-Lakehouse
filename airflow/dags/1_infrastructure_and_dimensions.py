@@ -9,7 +9,7 @@ import requests
     schedule=None,
     catchup=False,
     # max_active_tasks=2,
-    tags=['infrastructure']    
+    tags=['infrastructure', 'local']    
 )
 def infrastructure_and_dimensions():
 

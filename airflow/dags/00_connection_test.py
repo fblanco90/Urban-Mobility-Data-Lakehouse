@@ -9,7 +9,7 @@ import logging
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
-    tags=['test']
+    tags=['test', 'aws_batch']
 )
 def connection_test():
 

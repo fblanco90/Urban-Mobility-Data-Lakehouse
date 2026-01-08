@@ -9,7 +9,7 @@ from utils_db import get_connection
 BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-municipios/viajes/ficheros-diarios/{year}-{month}/{date}_Viajes_municipios.csv.gz"
 
 @dag(
-    dag_id="2_mobility_ingestion",
+    dag_id="2_mobility_ingestion_local",
     start_date=datetime(2023, 1, 1),
     schedule=None,
     catchup=False,
@@ -17,9 +17,9 @@ BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-mu
         "start_date": Param("20230101", type="string", description="YYYYMMDD"),
         "end_date": Param("20230101", type="string", description="YYYYMMDD"),
     },
-    tags=['infrastrucure']    
+    tags=['infrastrucure', 'local']    
 )
-def mobility_ingestion():
+def mobility_ingestion_local():
 
     @task
     def generate_date_list(**context: Any) -> list[str]:
@@ -123,7 +123,7 @@ def mobility_ingestion():
         logging.info(f"✅ Bronze: {b_count} rows ingested.")
 
     @task
-    def ensure_sl_mobility_table_exists(**context: Any) -> None:
+    def ensure_sl_mobility_table_exists() -> None:
         """
         Ensures the existence and structural configuration of the mobility fact table 
         within the silver layer. It initializes the table schema for storing trip 
@@ -131,15 +131,6 @@ def mobility_ingestion():
         partition date to optimize downstream queries.
         """
         logging.info("🛠 Checking/Creating Table Structures.")
-
-        # 1. Get a sample URL (using start_date) to infer Bronze Schema
-        conf = context['dag_run'].conf or {}
-        params = context['params']
-        date_str = conf.get('start_date') or params['start_date']
-        
-        year = date_str[:4]
-        month = date_str[4:6]
-        url = BASE_URL_TEMPLATE.format(year=year, month=month, date=date_str)
         
         with get_connection() as con:
             con.execute("""
@@ -239,4 +230,4 @@ def mobility_ingestion():
     init_silver >> silver_workers
     bronze_workers >> silver_workers
 
-mobility_ingestion()
+mobility_ingestion_local()

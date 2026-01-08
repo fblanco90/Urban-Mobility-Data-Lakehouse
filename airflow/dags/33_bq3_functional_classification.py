@@ -26,7 +26,7 @@ OUTPUT_FOLDER = "include/results/bq3"
             description="25830 (Meters), CRS84 (Lon/Lat), 4326 (Lat/Lon)"
         )
     },
-    tags=['mobility', 'gold', 'visualization', 'reporting']
+    tags=['mobility', 'gold', 'visualization', 'reporting', 'aws_batch']
 )
 def bq3_functional_classification():
 
