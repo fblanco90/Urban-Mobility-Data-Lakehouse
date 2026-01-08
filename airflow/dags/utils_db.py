@@ -2,7 +2,7 @@ import duckdb
 import os
 import logging
 from airflow.providers.amazon.aws.operators.batch import BatchOperator
-from airflow.hooks.base import BaseHook
+from airflow.sdk.bases.hook import BaseHook
 
 def get_connection():
     """
