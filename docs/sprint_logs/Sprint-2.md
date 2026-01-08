@@ -7,7 +7,7 @@
 
 **Date:** 24/11/2025
 
-**Status:** Finished
+**Status:** Done
 
 ## 1. Sprint Overview & Objectives
 In this sprint, the team focused on transitioning the project from a basic file-based Proof of Concept (PoC) to a managed Data Lakehouse architecture. The primary goal was to establish the foundational infrastructure using DuckLake, enabling ACID-compliant transactions, metadata management, and scalable storage for the future high-volume mobility data.

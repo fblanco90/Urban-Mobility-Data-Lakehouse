@@ -56,7 +56,7 @@ NOT Unique DAG for ingestion. DAGs redesign:
     - ![alt text](../images/AirflowDAGs/infrastructure_and_dimensions-DAG.png)
 - DAG 2: Ingest Bronze and Silver from a Day (Only mobility data) given a date range
     - We can ingest days anytime without ingesting the rest of csvs.
-    - - ![alt text](../images/AirflowDAGs/mobility_ingestion-DAG.png)
+    - ![alt text](../images/AirflowDAGs/mobility_ingestion-DAG.png)
 - DAG 3: Generate Gold tables and consultations
     - We can generate gold tables only when we have enough data
     - DAG 3.1: Query gold and generate data for Bussines question 1
