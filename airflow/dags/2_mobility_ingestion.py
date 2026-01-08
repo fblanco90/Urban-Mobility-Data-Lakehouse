@@ -1,10 +1,9 @@
 from datetime import datetime, timedelta
+import logging
 import requests
 import pandas as pd
-from airflow.models.param import Param
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task, Param
 from utils_db import get_connection
-import logging
 
 BASE_URL_TEMPLATE = "https://movilidad-opendata.mitma.es/estudios_basicos/por-municipios/viajes/ficheros-diarios/{year}-{month}/{date}_Viajes_municipios.csv.gz"
 
