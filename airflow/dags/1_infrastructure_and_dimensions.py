@@ -14,14 +14,22 @@ import requests
 def infrastructure_and_dimensions():
 
     @task
-    def create_schemas():
+    def create_schemas() -> None:
+        """
+        Initializes the Medallion architecture layers within the lakehouse by 
+        creating the bronze, silver, and gold schemas if they do not already exist.
+        """
         with get_connection() as con:
             for s in ['bronze', 'silver', 'gold']:
                 con.execute(f"CREATE SCHEMA IF NOT EXISTS lakehouse.{s}")
         logging.info("✅ Schemas ready.")
     
     @task
-    def create_stats_table():
+    def create_stats_table() -> None:
+        """
+        Creates the data quality logging table within the silver schema to track 
+        process metrics, including timestamps, table names, and specific metric values.
+        """
         with get_connection() as con:
             con.execute("""
                 CREATE TABLE IF NOT EXISTS lakehouse.silver.data_quality_log (
@@ -31,7 +39,12 @@ def infrastructure_and_dimensions():
         logging.info("✅ Log table ready.")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def br_ingest_geo_data():
+    def br_ingest_geo_data() -> None:
+        """
+        Validates the availability of remote spatial data components and ingests the 
+        resulting Shapefile into the bronze schema, enriching the records with 
+        ingestion timestamps and source metadata.
+        """
         table_name = 'geo_municipalities'
         base_url = 'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios'
         extensions = ['.shp', '.dbf', '.shx', '.prj']
@@ -70,7 +83,12 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def br_ingest_zoning_municipalities():
+    def br_ingest_zoning_municipalities() -> None:
+        """
+        Verifies the existence of a remote CSV file containing municipality zoning 
+        names and ingests it into the bronze layer, applying specific CSV parsing 
+        rules and adding metadata for ingestion tracking.
+        """
         table_name = 'zoning_municipalities'
         url = 'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/nombres_municipios.csv'
         sep = '|'
@@ -113,7 +131,12 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
   
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def br_ingest_population_municipalities():
+    def br_ingest_population_municipalities() -> None:
+        """
+        Validates the availability of a remote CSV file containing municipality population data 
+        and ingests it into the bronze layer, appending ingestion metadata and handling 
+        raw data parsing.
+        """
         table_name = 'population_municipalities'
         url = 'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv'
         sep = '|'
@@ -156,7 +179,12 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def br_ingest_mapping_ine_mitma():
+    def br_ingest_mapping_ine_mitma() -> None:
+        """
+        Verifies the accessibility of a remote CSV file containing INE to MITMA 
+        zoning mappings and ingests it into the bronze layer, including 
+        automatic schema detection and ingestion metadata.
+        """
         table_name = 'mapping_ine_mitma'
         url = 'https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv'
         sep = '|'
@@ -199,7 +227,12 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def br_ingest_work_calendars():
+    def br_ingest_work_calendars() -> None:
+        """
+        Validates the availability of a remote CSV file containing Madrid's work calendar 
+        and ingests it into the bronze layer, applying specific CSV formatting and 
+        enriching the table with ingestion metadata.
+        """
         table_name = 'work_calendars'
         url = 'https://datos.madrid.es/egob/catalogo/300082-4-calendario_laboral.csv'
         sep = ';'
@@ -242,7 +275,12 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def br_ingest_ine_rent_municipalities():
+    def br_ingest_ine_rent_municipalities() -> None:
+        """
+        Validates the accessibility of a remote tab-separated CSV file containing INE 
+        municipality rent data and ingests it into the bronze layer, appending 
+        ingestion metadata and handling the specific file format.
+        """
         table_name = 'ine_rent_municipalities'
         url = 'https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1'
         sep = '\t'
@@ -285,7 +323,13 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.bronze.{table_name}")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def sl_ingest_dim_zones():
+    def sl_ingest_dim_zones() -> None:
+        """
+        Processes and integrates municipal zoning data from the bronze layer to create 
+        a master dimension table in the silver layer. It resolves mappings between 
+        MITMA and INE codes, incorporates spatial geometries, and calculates 
+        centroids to support geographical analysis.
+        """
         logging.info("Building Silver: dim_zones")
         with get_connection() as con:
             con.execute("""
@@ -331,7 +375,13 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.silver.dim_zones")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def sl_ingest_metric_population():
+    def sl_ingest_metric_population() -> None:
+        """
+        Transforms raw population data from the bronze layer into a structured metric table 
+        within the silver layer. It performs data cleaning by filtering invalid records, 
+        casts population values to integers, and joins the data with the zones dimension 
+        table to ensure consistency and traceability.
+        """
         logging.info("Building Silver: metric_population")
         with get_connection() as con:
             con.execute("""
@@ -362,7 +412,13 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.silver.metric_population")
          
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def sl_ingest_metric_ine_rent():
+    def sl_ingest_metric_ine_rent() -> None:
+        """
+        Processes and cleans raw INE rent data from the bronze layer to generate a 
+        per-capita income metric table in the silver layer. It maps records to the 
+        standard zones dimension using INE codes, filters for municipality-level 
+        indicators, and formats numeric and temporal data for analysis.
+        """
         logging.info("Building Silver: metric_ine_rent")
         with get_connection() as con:
             con.execute("""
@@ -404,7 +460,13 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.silver.metric_ine_rent")
         
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def sl_ingest_dim_zone_holidays():
+    def sl_ingest_dim_zone_holidays() -> None:
+        """
+        Identifies 2023 national holidays from the bronze work calendars and performs 
+        a cross join with the silver zones dimension. This generates a comprehensive 
+        mapping in the silver layer where every geographical zone is associated 
+        with the identified holiday dates.
+        """
         logging.info("Building Silver: dim_zone_holidays")
         with get_connection() as con:
             con.execute("""
@@ -440,7 +502,12 @@ def infrastructure_and_dimensions():
         logging.info(f"✅ Table created succesfully: lakehouse.silver.dim_zone_holidays")
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def sl_create_zone_distance_matrix():
+    def sl_create_zone_distance_matrix() -> None:
+        """
+        Computes a geographical distance matrix between all unique pairs of zones 
+        using their centroids. The process converts spatial distances into kilometers 
+        and applies a minimum distance threshold for data consistency.
+        """
         with get_connection() as con:
             con.execute("""
                 CREATE OR REPLACE TABLE lakehouse.silver.dim_zone_distances AS
@@ -451,9 +518,17 @@ def infrastructure_and_dimensions():
                 FROM lakehouse.silver.dim_zones a, lakehouse.silver.dim_zones b
                 WHERE a.zone_id != b.zone_id;
             """)
+        logging.info(f"✅ Table created succesfully: lakehouse.silver.dim_zone_distances")
+
 
     @task
-    def audit_dimensions():
+    def audit_dimensions() -> None:
+        """
+        Performs a data quality audit on the silver layer dimension and metric tables,
+        calculating key indicators such as missing values, record counts, and data 
+        coverage percentages. Results are persisted into the centralized data 
+        quality log table for monitoring and traceability.
+        """
         logging.info("🕵️ Starting Data Quality Audit for Dimensions.")
 
         # Helper to insert into log
