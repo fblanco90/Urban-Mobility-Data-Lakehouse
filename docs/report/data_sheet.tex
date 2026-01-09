@@ -1,0 +1,342 @@
+\documentclass[11pt, a4paper]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{margin=1in}       % Standard margins
+\usepackage{mathptmx}       % Times New Roman style font (professional)
+\usepackage[english]{babel} % Language setting
+
+% --- Formatting Packages ---
+\usepackage{setspace}       % For line spacing
+\usepackage{titlesec}       % To customize header look
+\usepackage{xcolor}         % For colors
+\usepackage{enumitem}       % Better list control
+
+% --- Images & Tables ---
+\usepackage{graphicx} 
+\usepackage{float}          % For [H] placement
+\usepackage{pdflscape}      % For landscape pages
+\usepackage{booktabs}       % For nicer tables if needed
+
+% --- Hyperlinks ---
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={Lakehouse Map Document},
+    pdfpagemode=FullScreen,
+}
+
+% --- Metadata ---
+\title{\textbf{Lakehouse Architecture Map} \\ \Large Technical Reference \& Data Dictionary}
+
+\author{
+    \textbf{María López Hernández}
+    \and
+    \textbf{Joan Sánchez Verdú}
+    \and
+    \textbf{Fernando Blanco Membrives}
+}
+
+% We use the date field to also include the Subject
+\date{
+    \vspace{1cm}
+    Big Data Engineering and Technologies \\
+    \today
+}
+
+% --- Document Start ---
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+    This document serves as the primary technical reference for the Mobility Lakehouse. It details the Medallion architecture, schema definitions for Bronze, Silver, and Gold layers, and the transformation logic applied to source data from MITMA and INE.
+\end{abstract}
+
+
+\section{Data Layering Strategy}
+The platform follows a ``Medallion'' Lakehouse architecture (Bronze $\rightarrow$ Silver $\rightarrow$ Gold). This document serves as the technical reference for the data models, detailing schema definitions, data types (DuckDB dialect), and transformation logic.
+\subsection{Bronze Layer (Raw Ingestion)}
+The Bronze layer acts as the immutable staging area. Data is ingested from external sources (MITMA, INE, Madrid Open Data) in its native format. To prevent pipeline failures caused by unexpected data types in the source files, strict typing is deferred to the Silver layer; consequently, almost all columns in this layer are typed as \texttt{VARCHAR}, preserving the original formatting (e.g., decimal commas, date formats).
+
+In addition, to ensure auditability and lineage, every table in this layer includes two system columns:
+\begin{itemize}
+    \item \texttt{ingestion\_timestamp} (\texttt{TIMESTAMP}): The UTC timestamp of when the record was inserted.
+    \item \texttt{source\_url} (\texttt{VARCHAR}): The specific file URI or API endpoint origin.
+\end{itemize}
+
+Below is the complete dictionary of tables persisted in the Bronze Schema:
+
+\paragraph{1. Mobility Data (High Volume)}
+
+\begin{description}
+    \item[\texttt{bronze\_mobility\_data}] \hfill \\
+    \textit{Description:} Stores the raw daily origin-destination matrices. This table is physically partitioned by the \texttt{fecha} column.
+    \begin{itemize}
+        \item \texttt{fecha} (\texttt{VARCHAR}): Date of the trip (Format: YYYYMMDD).
+        \item \texttt{periodo} (\texttt{VARCHAR}): Hourly interval (00-23).
+        \item \texttt{origen} (\texttt{VARCHAR}): Source MITMA Zone ID.
+        \item \texttt{destino} (\texttt{VARCHAR}): Destination MITMA Zone ID.
+        \item \texttt{distancia} (\texttt{VARCHAR}): Distance category (e.g., ``005-010'').
+        \item \texttt{actividad\_origen} (\texttt{VARCHAR}): Imputed purpose at origin (e.g., ``casa'').
+        \item \texttt{actividad\_destino} (\texttt{VARCHAR}): Imputed purpose at destination.
+        \item \texttt{estudio\_origen\_posible} (\texttt{VARCHAR}): Auxiliary study flag.
+        \item \texttt{estudio\_destino\_posible} (\texttt{VARCHAR}): Auxiliary study flag.
+        \item \texttt{residencia} (\texttt{VARCHAR}): Zone ID of the traveler's residence.
+        \item \texttt{renta} (\texttt{VARCHAR}): Income decile of the traveler.
+        \item \texttt{edad} (\texttt{VARCHAR}): Age group interval.
+        \item \texttt{sexo} (\texttt{VARCHAR}): Gender (1/2).
+        \item \texttt{viajes} (\texttt{VARCHAR}): The expansion factor/number of trips (String with comma decimals).
+        \item \texttt{viajes\_km} (\texttt{VARCHAR}): Total kilometers traveled.
+    \end{itemize}
+\end{description}
+
+\paragraph{2. Spatial \& Reference Data}
+
+\begin{description}
+    \item[\texttt{bronze\_geo\_municipalities}] \hfill \\
+    \textit{Description:} Ingested from ESRI Shapefiles. This is the only table containing a native spatial type upon ingestion.
+    \begin{itemize}
+        \item \texttt{ID} (\texttt{VARCHAR}): The MITMA Zone Code.
+        \item \texttt{geom} (\texttt{GEOMETRY}): The binary geometry object (Polygon/MultiPolygon).
+    \end{itemize}
+
+    \item[\texttt{bronze\_zoning\_municipalities}] \hfill \\
+    \textit{Description:} Provides the mapping between numerical IDs and text names.
+    \begin{itemize}
+        \item \texttt{column0} (\texttt{VARCHAR}): Index column from raw CSV.
+        \item \texttt{ID} (\texttt{VARCHAR}): MITMA Zone Code.
+        \item \texttt{name} (\texttt{VARCHAR}): Official Municipality Name.
+        \item \texttt{filename} (\texttt{VARCHAR}): Name of the source file.
+    \end{itemize}
+
+    \item[\texttt{bronze\_mapping\_ine\_mitma}] \hfill \\
+    \textit{Description:} A crosswalk table linking Transport Ministry codes (MITMA) with Statistics Institute codes (INE).
+    \begin{itemize}
+        \item \texttt{seccion\_ine} (\texttt{VARCHAR}): Census Section ID.
+        \item \texttt{distrito\_ine} (\texttt{VARCHAR}): Census District ID.
+        \item \texttt{municipio\_ine} (\texttt{VARCHAR}): INE Municipality Code.
+        \item \texttt{distrito\_mitma} (\texttt{VARCHAR}): Transport District ID.
+        \item \texttt{municipio\_mitma} (\texttt{VARCHAR}): Transport Municipality ID.
+        \item \texttt{gau\_mitma} (\texttt{VARCHAR}): Great Urban Area (GAU) code.
+        \item \texttt{filename} (\texttt{VARCHAR}): Name of the source file.
+    \end{itemize}
+\end{description}
+
+\paragraph{3. Socio-Economic \& Temporal Data}
+
+\begin{description}
+    \item[\texttt{bronze\_population\_municipalities}] \hfill \\
+    \textit{Description:} Raw population counts. Note the lack of headers in the source file.
+    \begin{itemize}
+        \item \texttt{column0} (\texttt{VARCHAR}): Zone Code.
+        \item \texttt{column1} (\texttt{VARCHAR}): Population count.
+        \item \texttt{filename} (\texttt{VARCHAR}): Name of the source file.
+    \end{itemize}
+
+    \item[\texttt{bronze\_ine\_rent\_municipalities}] \hfill \\
+    \textit{Description:} Economic indicators from INE.
+    \begin{itemize}
+        \item \texttt{Municipios} (\texttt{VARCHAR}): Composite string (Code + Name).
+        \item \texttt{Distritos} (\texttt{VARCHAR}): District ID (if applicable).
+        \item \texttt{Secciones} (\texttt{VARCHAR}): Section ID (if applicable).
+        \item \texttt{Indicadores\_de\_renta\_media} (\texttt{VARCHAR}): The name of the metric.
+        \item \texttt{Periodo} (\texttt{VARCHAR}): Reference year.
+        \item \texttt{Total} (\texttt{VARCHAR}): The numeric value (contains dots for thousands).
+        \item \texttt{filename} (\texttt{VARCHAR}): Name of the source file.
+    \end{itemize}
+
+    \item[\texttt{bronze\_work\_calendars}] \hfill \\
+    \textit{Description:} Calendar data for holiday identification. Extra columns (column5-8) represent empty fields often found in loosely structured CSVs.
+    \begin{itemize}
+        \item \texttt{Dia} (\texttt{VARCHAR}): Date string (DD/MM/YYYY).
+        \item \texttt{Dia\_semana} (\texttt{VARCHAR}): Name of the weekday.
+        \item \texttt{laborable\_festivo\_domingo\_festivo} (\texttt{VARCHAR}): Workday status.
+        \item \texttt{Tipo\_de\_Festivo} (\texttt{VARCHAR}): Flag for National/Local holidays.
+        \item \texttt{Festividad} (\texttt{VARCHAR}): Name of the holiday.
+        \item \texttt{column5}, \texttt{column6}, \texttt{column7}, \texttt{column8} (\texttt{VARCHAR}): Parsing artifacts from raw CSV.
+        \item \texttt{filename} (\texttt{VARCHAR}): Name of the source file.
+    \end{itemize}
+\end{description}
+
+
+
+
+\newpage
+\begin{landscape}
+\begin{figure}[p]
+    \centering
+    \includegraphics[width=1.5\textwidth]{imgs/Bronze_Schema_diagramS4.png}
+    \caption{Entity Diagram of the Bronze Layer. One table for each file.}
+    \label{fig:bronze_layer_diagram}
+\end{figure}
+\end{landscape}
+
+
+\subsection{Silver Layer (Cleaned \& Integrated)}
+The Silver layer implements a Star Schema design. In this stage, data is cast to strict types, cleaned of formatting artifacts (e.g., removing thousands separators), and enriched with spatial calculations. All tables include a \texttt{processed\_at} (\texttt{TIMESTAMP}) column for versioning.
+
+\paragraph{1. Dimension Tables (Context)}
+
+\begin{description}
+    \item[\texttt{silver.dim\_zones}] \hfill \\
+    \textit{Purpose:} The central spatial authority table. \\
+    \textit{Transformation:} Joins \texttt{geo}, \texttt{zoning}, and \texttt{mapping} tables. Generates a Surrogate Key.
+    \begin{itemize}
+        \item \texttt{zone\_id} (\texttt{BIGINT}): Sequential integer generated via \texttt{ROW\_NUMBER()}.
+        \item \texttt{mitma\_code} (\texttt{VARCHAR}): Original Transport ID.
+        \item \texttt{ine\_code} (\texttt{VARCHAR}): National Statistics ID (Cleaned).
+        \item \texttt{zone\_name} (\texttt{VARCHAR}): Human-readable name.
+        \item \texttt{polygon} (\texttt{GEOMETRY}): Boundary for spatial joins.
+        \item \texttt{centroid} (\texttt{GEOMETRY}): Calculated center (\texttt{ST\_Centroid}) for distance logic.
+    \end{itemize}
+
+    \item[\texttt{silver.dim\_zone\_distances}] \hfill \\
+    \textit{Purpose:} Pre-computed Distance Matrix ($N \times N$). \\
+    \textit{Transformation:} Cartesian product of \texttt{dim\_zones}.
+    \begin{itemize}
+        \item \texttt{origin\_zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{destination\_zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{dist\_km} (\texttt{DOUBLE}): Euclidean distance in km. \textbf{Logic:} \texttt{GREATEST(0.5, dist)} ensures no zero-distances to prevent division errors in Gravity Models.
+    \end{itemize}
+
+    \item[\texttt{silver.dim\_zone\_holidays}] \hfill \\
+    \textit{Purpose:} Temporal context for mobility patterns. \\
+    \textit{Transformation:} Filters \texttt{work\_calendars} for ``National Holidays'' in 2023 and explodes them to all zones via Cross Join.
+    \begin{itemize}
+        \item \texttt{zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{holiday\_date} (\texttt{DATE}): The specific date of the holiday.
+    \end{itemize}
+\end{description}
+
+\paragraph{2. Metric Tables (Auxiliary Data)}
+
+\begin{description}
+    \item[\texttt{silver.metric\_population}] \hfill \\
+    \textit{Grain:} One row per Zone per Year.
+    \begin{itemize}
+        \item \texttt{zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{population} (\texttt{BIGINT}): Cast from \texttt{column1}. \textbf{Cleaning:} Regex filter \texttt{[a-zA-Z]} removes header rows from raw CSV.
+        \item \texttt{year} (\texttt{INTEGER}): Reference year (2023).
+    \end{itemize}
+
+    \item[\texttt{silver.metric\_ine\_rent}] \hfill \\
+    \textit{Grain:} One row per Zone per Year.
+    \begin{itemize}
+        \item \texttt{zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{income\_per\_capita} (\texttt{DOUBLE}): Cast from \texttt{Total}. \textbf{Cleaning:} Removes dots (``.'') and filters only ``Renta neta media por persona''.
+        \item \texttt{year} (\texttt{INTEGER}): Reference year.
+    \end{itemize}
+\end{description}
+
+\paragraph{3. Fact Table (Core Mobility)}
+
+\begin{description}
+    \item[\texttt{silver.fact\_mobility}] \hfill \\
+    \textit{Purpose:} The transactional heart of the Lakehouse. \\
+    \textit{Grain:} One row per trip flow (Origin $\to$ Dest $\to$ Time). \\
+    \textit{Transformation:} Converts string dates/hours into Timezoned Timestamps. Filters out invalid zones via Inner Joins to \texttt{dim\_zones}.
+    \begin{itemize}
+        \item \texttt{period} (\texttt{TIMESTAMP WITH TIME ZONE}): \textbf{Logic:} \texttt{fecha} + \texttt{periodo} converted to ``Europe/Madrid''.
+        \item \texttt{partition\_date} (\texttt{DATE}): Partition Key derived from \texttt{fecha}.
+        \item \texttt{origin\_zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{destination\_zone\_id} (\texttt{BIGINT}): FK ref \texttt{dim\_zones}.
+        \item \texttt{trips} (\texttt{DOUBLE}): Number of trips cast to double precision.
+    \end{itemize}
+\end{description}
+
+\paragraph{4. Data Observability}
+
+\begin{description}
+    \item[\texttt{silver.data\_quality\_log}] \hfill \\
+    \textit{Purpose:} Metadata registry for pipeline health.
+    \begin{itemize}
+        \item \texttt{check\_timestamp} (\texttt{TIMESTAMP}): Audit time.
+        \item \texttt{table\_name} (\texttt{VARCHAR}): Target of the check.
+        \item \texttt{metric\_name} (\texttt{VARCHAR}): e.g., ``null\_rate'', ``row\_count''.
+        \item \texttt{metric\_value} (\texttt{DOUBLE}): The result of the check.
+        \item \texttt{notes} (\texttt{VARCHAR}): Context or warnings.
+    \end{itemize}
+\end{description}
+
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{imgs/Silver_Schema_diagramS4}
+    
+    \caption{Entity-Relationship Diagram (ERD) of the Silver Layer. The schema follows a Star Schema design, centering on the \texttt{fact\_mobility} table linked to spatial (\texttt{dim\_zones}) and temporal dimensions.}
+    \label{fig:silver_layer_diagram}
+\end{figure}
+
+
+\subsection{Gold Layer (Data Mart)}
+The Gold layer is the final destination for analytics, designed to answer specific business questions. Unlike the normalized Silver layer, these tables are denormalized and pre-aggregated to optimize query performance for visualization tools (Kepler.gl, Plotly).
+
+Below is the technical definition of the three core analytical products persisted in this layer:
+
+\paragraph{1. Temporal Analysis (Use Case 1)}
+
+\begin{description}
+    \item[\texttt{gold.typical\_day\_patterns}] \hfill \\
+    \textit{Purpose:} Stores the centroids of the mobility profiles identified via Unsupervised Learning (K-Means). It reduces billions of raw records into lightweight hourly curves representing standard behaviors (e.g., ``Workday'' vs ``Holiday'').
+    \textit{Grain:} One row per Cluster per Hour.
+    \begin{itemize}
+        \item \texttt{cluster\_id} (\texttt{INTEGER}): The label assigned by the K-Means algorithm (0, 1, or 2).
+        \item \texttt{hour} (\texttt{INTEGER}): Hour of the day (0-23).
+        \item \texttt{avg\_trips} (\texttt{DOUBLE}): The average normalized volume of trips for this specific hour/cluster combination. Used for plotting demand curves.
+        \item \texttt{processed\_at} (\texttt{TIMESTAMP}): Audit timestamp.
+    \end{itemize}
+\end{description}
+
+\paragraph{2. Infrastructure Gap Analysis (Use Case 2)}
+
+\begin{description}
+    \item[\texttt{gold.infrastructure\_gaps}] \hfill \\
+    \textit{Purpose:} The output of the Gravity Model. This table joins mobility flows with socio-economic dimensions to quantify the disparity between theoretical potential and actual usage.
+    \textit{Grain:} One row per Origin-Destination pair.
+    \begin{itemize}
+        \item \texttt{org\_zone\_id} (\texttt{BIGINT}): Origin Zone FK.
+        \item \texttt{dest\_zone\_id} (\texttt{BIGINT}): Destination Zone FK.
+        \item \texttt{total\_population} (\texttt{BIGINT}): Population at origin (Driver of demand).
+        \item \texttt{rent} (\texttt{DOUBLE}): Income per capita at destination (Attractor).
+        \item \texttt{total\_trips} (\texttt{DOUBLE}): The actual observed mobility volume from Silver.
+        \item \texttt{dist\_km} (\texttt{DOUBLE}): Distance impedance between zones.
+        \item \texttt{mismatch\_ratio} (\texttt{DOUBLE}): The key analytical KPI calculated as $ActualTrips / PotentialScore$. A value $\ll 1.0$ indicates an infrastructure deficit.
+    \end{itemize}
+\end{description}
+
+\paragraph{3. Functional Classification (Use Case 3)}
+
+\begin{description}
+    \item[\texttt{gold.zone\_functional\_classification}] \hfill \\
+    \textit{Purpose:} A semantic layer that profiles every municipality based on its role in the metropolitan network (Importer vs. Exporter of commuters).
+    \textit{Grain:} One row per Zone.
+    \begin{itemize}
+        \item \texttt{zone\_id} (\texttt{BIGINT}): Id of the zone.
+        \item \texttt{zone\_name} (\texttt{VARCHAR}): Human-readable name for map tooltips.
+        \item \texttt{internal\_trips} (\texttt{DOUBLE}): Count of trips starting and ending in the same zone.
+        \item \texttt{outflow} (\texttt{DOUBLE}): Count of trips leaving the zone.
+        \item \texttt{inflow} (\texttt{DOUBLE}): Count of trips entering the zone.
+        \item \texttt{net\_flow\_ratio} (\texttt{DOUBLE}): Calculated metric: $(In - Out) / Total$. Positive values indicate ``Activity Hubs''; negative values indicate ``Residential/Bedroom Communities''.
+        \item \texttt{retention\_rate} (\texttt{DOUBLE}): Calculated metric: $Internal / (Out + Internal)$. Indicates self-sufficiency.
+        \item \texttt{functional\_label} (\texttt{VARCHAR}): The final categorical classification derived from the decision tree logic (e.g., ``Self-Sustaining Cell'', ``Activity Hub'').
+    \end{itemize}
+\end{description}
+
+
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{imgs/Gold_Schema_diagramS4} 
+    \caption{Gold Layer Schema. These tables represent the final analytical products, denormalized and enriched with derived metrics (e.g., mismatch ratios, functional labels) ready for visualization.}
+    \label{fig:gold_layer_diagram}
+\end{figure}
+
+\end{document}
