@@ -129,7 +129,7 @@ To categorize mobility patterns by day type (e.g., distinguishing standard workd
 The system follows the Medallion Architecture pattern, decoupled into storage and compute layers to ensure scalability.
 
 \subsection{Technology Stack}
-The platform employs a modular architecture designed to decouple storage from compute, leveraging the following core components:
+The platform employs a modular architecture designed to decouple storage from compute (Figure \ref{fig:architecture}), leveraging the following core components:
 
 \begin{itemize}
     \item \textbf{Compute Engine (DuckDB \cite{duckdb}):} A high-performance, in-process SQL OLAP engine. It handles vectorized data processing and supports out-of-core execution, allowing for the analysis of datasets larger than available RAM.
@@ -142,6 +142,13 @@ The platform employs a modular architecture designed to decouple storage from co
 
     \item \textbf{Orchestration (Apache Airflow \cite{airflow}):} Manages the end-to-end data lifecycle via Directed Acyclic Graphs (DAGs), handling complex dependencies, scheduling, and automated retries.
 \end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{imgs/Architecture_diagram}
+    \caption{High-level overview of the 3-Tier Data Lakehouse architecture, decoupling compute (DuckDB) from storage (S3).}
+    \label{fig:architecture}
+\end{figure}
 
 \subsection{Data Layering Strategy}
 The data pipeline is structured following the standard ``Medallion'' architecture pattern (Multi-hop), which organizes data quality into progressive stages. This design ensures that raw data is preserved for auditability while downstream layers provide cleaned and enriched datasets optimized for analytical consumption. The architecture consists of three distinct zones, each with a specific purpose and schema design.
