@@ -1,0 +1,553 @@
+\documentclass[11pt, a4paper]{article}
+
+% --- Core Language & Encoding ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{microtype}      % Improves spacing between words
+
+% --- Fonts ---
+\usepackage{mathpazo}       % Palatino font (Elegant and professional)
+\usepackage[scaled]{helvet} % Helvetica for headers
+\linespread{1.15}           % Slight line spacing increase for readability
+
+% --- Layout & Geometry ---
+\usepackage{geometry}
+\geometry{
+    top=2.5cm,
+    bottom=2.5cm,
+    left=2.5cm,
+    right=2.5cm
+}
+\usepackage{pdflscape}
+\usepackage{lastpage}       % For "Page X of Y"
+\usepackage{fancyhdr}       % Custom headers/footers
+\setlength{\headheight}{15pt}
+
+% --- Tables (Crucial for Data Dictionaries) ---
+\usepackage{booktabs}       % Professional horizontal rules
+\usepackage{tabularx}       % Auto-width tables
+\usepackage{ltablex}        % Combines tabularx and longtable (breaks across pages)
+\usepackage{multirow}       % Merging rows
+\keepXColumns               % Keeps X columns flexible in ltablex
+
+% --- Colors & Graphics ---
+\usepackage[table,dvipsnames]{xcolor} % 'table' option allows colored rows
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{tcolorbox}
+\tcbuselibrary{most}        % Load advanced tcolorbox features
+
+% --- Hyperlinks (Must be last package) ---
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=MidnightBlue,
+    urlcolor=RoyalBlue,
+    citecolor=TealBlue,
+    pdftitle={Lakehouse Architecture Map},
+    pdfauthor={Data Engineering Team}
+}
+
+% --- Custom Color Definitions ---
+\definecolor{techblue}{RGB}{0, 51, 102}      % Deep Navy
+\definecolor{techaccent}{RGB}{52, 152, 219}  % Lighter Blue for highlights
+\definecolor{lightgray}{RGB}{245, 245, 245}  % Background for boxes
+\definecolor{techgray}{RGB}{230, 230, 230}
+
+% --- Header & Footer Configuration ---
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textcolor{techblue}{\small \textsc{Lakehouse Architecture Map}}}
+\rhead{\small \leftmark}
+\lfoot{\small \today}
+\rfoot{\small Page \thepage \hspace{1pt} of \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% --- Section Styling ---
+\usepackage{titlesec}
+\titleformat{\section}
+  {\color{techblue}\sffamily\Large\bfseries} % Sans-serif, Blue, Bold
+  {\thesection}{1em}{}
+\titleformat{\subsection}
+  {\color{techblue}\sffamily\large\bfseries}
+  {\thesubsection}{1em}{}
+
+% --- Custom Box for Table Schemas ---
+% Usage: \begin{schemabox}{Table Name} ... \end{schemabox}
+\newtcolorbox{schemabox}[2][]{
+  enhanced,
+  breakable,                % Allows box to split across pages
+  colback=white,
+  colframe=techblue,
+  colbacktitle=techblue,
+  coltitle=white,
+  fonttitle=\sffamily\bfseries\large,
+  title={#2},
+  sharp corners=south,      % Sharp corners at bottom
+  drop fuzzy shadow,        % Adds a subtle 3D effect
+  #1
+}
+
+% --- Document Start ---
+\begin{document}
+
+% --- Professional Title Page ---
+\begin{titlepage}
+    \centering
+    \vspace*{1cm}
+    
+    
+    \includegraphics[width=6.5cm]{imgs/yourLogo.jpg} 
+    \vspace{1.5cm}
+    
+    {\scshape\LARGE Technical Reference \& Data Dictionary \par}
+    \vspace{0.5cm}
+    
+    {\Huge\bfseries\textcolor{techblue}{Lakehouse Architecture Map} \par}
+    
+    \vspace{0.5cm}
+    \rule{\linewidth}{0.5mm}
+    \vspace{2cm}
+    
+    \textbf{\Large Authors:} \\[0.5cm]
+    {\large
+    María López Hernández \\
+    Joan Sánchez Verdú \\
+    Fernando Blanco Membrives
+    }
+    
+    \vfill
+    
+    
+    \textsc{Big Data Engineering and Technologies}
+    
+    \vspace{1cm}
+    
+    {\large \today}
+    
+    \vspace{1cm}
+\end{titlepage}
+
+% --- Table of Contents ---
+\newpage
+\begin{abstract}
+    This document serves as the primary technical reference for the implementation of the Mobility Lakehouse. It provides a comprehensive specification of the data architecture, adhering to the ``Medallion'' design pattern (Bronze, Silver, and Gold). The document details the schema definitions for each layer, the data lineage from source systems (MITMA and INE), and the transformation logic required to convert raw ingestion files into analytical data marts used for infrastructure gap analysis and functional zoning.
+\end{abstract}
+\tableofcontents
+\newpage
+
+% --- Main Content Starts Here ---
+
+\section{Data Layering Strategy}
+The platform adheres to the ``Medallion'' Lakehouse architecture (Bronze $\rightarrow$ Silver $\rightarrow$ Gold). This document serves as the technical reference for the data models, detailing schema definitions, data types (DuckDB dialect), and transformation logic.
+
+\subsection{Bronze Layer (Raw Ingestion)}
+The Bronze layer functions as an immutable staging area. Data is ingested from external sources (MITMA, INE, Madrid Open Data) in its native format. To mitigate pipeline failures arising from schema drift or unexpected data types, strict typing is deferred to the Silver layer. Consequently, attributes in this layer are cast as \texttt{VARCHAR}, preserving the original formatting (e.g., European decimal commas, varying date formats).
+
+\vspace{0.3cm}
+\begin{tcolorbox}[colback=techgray, colframe=techblue, title=\textbf{Common Audit Columns}]
+    To ensure auditability and data lineage, every table in this layer includes the following system columns:
+    \begin{itemize}
+        \item \texttt{ingestion\_timestamp} (\texttt{TIMESTAMP}): The UTC timestamp recording the insertion time.
+        \item \texttt{source\_url} (\texttt{VARCHAR}): The specific file URI or API endpoint origin.
+    \end{itemize}
+\end{tcolorbox}
+
+\subsubsection{Mobility Data (High Volume)}
+
+\begin{schemabox}{Table: \texttt{bronze\_mobility\_data}}
+    \small
+    \textbf{Description:} Stores the raw daily origin-destination matrices. This table is physically partitioned by the \texttt{fecha} column for query optimization.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray} % Zebra striping
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{fecha} & \texttt{VARCHAR} & Date of the trip (Format: YYYYMMDD). \\
+        \texttt{periodo} & \texttt{VARCHAR} & Hourly interval (00-23). \\
+        \texttt{origen} & \texttt{VARCHAR} & Source MITMA Zone ID. \\
+        \texttt{destino} & \texttt{VARCHAR} & Destination MITMA Zone ID. \\
+        \texttt{distancia} & \texttt{VARCHAR} & Distance category (e.g., ``005-010''). \\
+        \texttt{actividad\_origen} & \texttt{VARCHAR} & Imputed purpose at origin (e.g., ``casa''). \\
+        \texttt{actividad\_destino} & \texttt{VARCHAR} & Imputed purpose at destination. \\
+        \texttt{estudio\_origen\_posible} & \texttt{VARCHAR} & Auxiliary study flag. \\
+        \texttt{estudio\_destino\_posible} & \texttt{VARCHAR} & Auxiliary study flag. \\
+        \texttt{residencia} & \texttt{VARCHAR} & Zone ID of the traveler's residence. \\
+        \texttt{renta} & \texttt{VARCHAR} & Income decile of the traveler. \\
+        \texttt{edad} & \texttt{VARCHAR} & Age group interval. \\
+        \texttt{sexo} & \texttt{VARCHAR} & Gender (1/2). \\
+        \texttt{viajes} & \texttt{VARCHAR} & Expansion factor (String w/ comma decimals). \\
+        \texttt{viajes\_km} & \texttt{VARCHAR} & Total kilometers traveled. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Spatial \& Reference Data}
+
+\begin{schemabox}{Table: \texttt{bronze\_geo\_municipalities}}
+    \small
+    \textbf{Description:} Ingested from ESRI Shapefiles. This is the only table containing a native spatial type upon ingestion.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{ID} & \texttt{VARCHAR} & The MITMA Zone Code. \\
+        \texttt{geom} & \texttt{GEOMETRY} & Binary geometry object (Polygon/MultiPolygon). \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{bronze\_zoning\_municipalities}}
+    \small
+    \textbf{Description:} Provides the mapping between numerical IDs and text names.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{column0} & \texttt{VARCHAR} & Index column from raw CSV. \\
+        \texttt{ID} & \texttt{VARCHAR} & MITMA Zone Code. \\
+        \texttt{name} & \texttt{VARCHAR} & Official Municipality Name. \\
+        \texttt{filename} & \texttt{VARCHAR} & Name of the source file. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{bronze\_mapping\_ine\_mitma}}
+    \small
+    \textbf{Description:} A crosswalk table linking Transport Ministry codes (MITMA) with Statistics Institute codes (INE).
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{seccion\_ine} & \texttt{VARCHAR} & Census Section ID. \\
+        \texttt{distrito\_ine} & \texttt{VARCHAR} & Census District ID. \\
+        \texttt{municipio\_ine} & \texttt{VARCHAR} & INE Municipality Code. \\
+        \texttt{distrito\_mitma} & \texttt{VARCHAR} & Transport District ID. \\
+        \texttt{municipio\_mitma} & \texttt{VARCHAR} & Transport Municipality ID. \\
+        \texttt{gau\_mitma} & \texttt{VARCHAR} & Great Urban Area (GAU) code. \\
+        \texttt{filename} & \texttt{VARCHAR} & Name of the source file. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Socio-Economic \& Temporal Data}
+
+\begin{schemabox}{Table: \texttt{bronze\_population\_municipalities}}
+    \small
+    \textbf{Description:} Raw population counts. Headers are absent in the source file.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{column0} & \texttt{VARCHAR} & Zone Code. \\
+        \texttt{column1} & \texttt{VARCHAR} & Population count. \\
+        \texttt{filename} & \texttt{VARCHAR} & Name of the source file. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{bronze\_ine\_rent\_municipalities}}
+    \small
+    \textbf{Description:} Economic indicators sourced from INE.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{Municipios} & \texttt{VARCHAR} & Composite string (Code + Name). \\
+        \texttt{Distritos} & \texttt{VARCHAR} & District ID (if applicable). \\
+        \texttt{Secciones} & \texttt{VARCHAR} & Section ID (if applicable). \\
+        \texttt{Indicadores...} & \texttt{VARCHAR} & The name of the metric (e.g., Average Rent). \\
+        \texttt{Periodo} & \texttt{VARCHAR} & Reference year. \\
+        \texttt{Total} & \texttt{VARCHAR} & Numeric value (contains dots for thousands). \\
+        \texttt{filename} & \texttt{VARCHAR} & Name of the source file. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{bronze\_work\_calendars}}
+    \small
+    \textbf{Description:} Calendar data for holiday identification. Columns 5-8 represent empty fields often found in loosely structured CSVs.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{Dia} & \texttt{VARCHAR} & Date string (DD/MM/YYYY). \\
+        \texttt{Dia\_semana} & \texttt{VARCHAR} & Name of the weekday. \\
+        \texttt{laborable...} & \texttt{VARCHAR} & Workday status. \\
+        \texttt{Tipo\_de\_Festivo} & \texttt{VARCHAR} & Flag for National/Local holidays. \\
+        \texttt{Festividad} & \texttt{VARCHAR} & Name of the holiday. \\
+        \texttt{column5-8} & \texttt{VARCHAR} & Parsing artifacts from raw CSV. \\
+        \texttt{filename} & \texttt{VARCHAR} & Name of the source file. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\newpage
+\begin{landscape}
+\begin{figure}[p]
+    \centering
+    \includegraphics[width=1.5\textwidth]{imgs/Bronze_Schema_diagramS4.png}
+    \caption{Entity Diagram of the Bronze Layer. One table for each file.}
+    \label{fig:bronze_layer_diagram}
+\end{figure}
+\end{landscape}
+
+\subsection{Silver Layer (Cleaned \& Integrated)}
+The Silver layer implements a dimensional modeling approach (Star Schema). In this stage, data is cast to strict types, cleaned of formatting artifacts (e.g., normalization of numeric separators), and enriched with derived spatial calculations. To ensure lineage and version control, all tables include a \texttt{processed\_at} (\texttt{TIMESTAMP}) column.
+
+\subsubsection{Dimension Tables (Context)}
+
+\begin{schemabox}{Table: \texttt{silver.dim\_zones}}
+    \small
+    \textbf{Purpose:} The central spatial authority table for the Lakehouse. \\
+    \textbf{Transformation:} Integrates \texttt{geo}, \texttt{zoning}, and \texttt{mapping} sources. A Surrogate Key is generated to decouple the analytical model from source system identifiers.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{zone\_id} & \texttt{BIGINT} & \textbf{PK.} Surrogate Key generated via \texttt{ROW\_NUMBER()}. \\
+        \texttt{mitma\_code} & \texttt{VARCHAR} & Original Transport Ministry ID. \\
+        \texttt{ine\_code} & \texttt{VARCHAR} & National Statistics ID (Cleaned). \\
+        \texttt{zone\_name} & \texttt{VARCHAR} & Standardized human-readable name. \\
+        \texttt{polygon} & \texttt{GEOMETRY} & WKB Boundary for spatial joins. \\
+        \texttt{centroid} & \texttt{GEOMETRY} & Calculated center (\texttt{ST\_Centroid}) for point-based distance logic. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{silver.dim\_zone\_distances}}
+    \small
+    \textbf{Purpose:} Pre-computed Distance Matrix ($N \times N$) to accelerate gravity model calculations. \\
+    \textbf{Transformation:} Generated via a Cartesian product of \texttt{dim\_zones}.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{origin\_zone\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{dest\_zone\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{dist\_km} & \texttt{DOUBLE} & Euclidean distance in km. \textbf{Logic:} \texttt{GREATEST(0.5, dist)} is applied to prevent division-by-zero errors in downstream models. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{silver.dim\_zone\_holidays}}
+    \small
+    \textbf{Purpose:} Provides temporal context for mobility patterns (e.g., distinguishing workdays from holidays). \\
+    \textbf{Transformation:} Subsets \texttt{work\_calendars} for ``National Holidays'' and broadcasts them to all zones via a Cross Join.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{zone\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{holiday\_date} & \texttt{DATE} & The specific date of the holiday event. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Metric Tables (Auxiliary Data)}
+
+\begin{schemabox}{Table: \texttt{silver.metric\_population}}
+    \small
+    \textbf{Grain:} One row per Zone per Year. \\
+    \textbf{Cleaning Logic:} Applies Regex filter \texttt{[a-zA-Z]} to remove invalid header rows found in the raw CSV.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{zone\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{population} & \texttt{BIGINT} & Official population count. \\
+        \texttt{year} & \texttt{INTEGER} & Reference year (e.g., 2023). \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{schemabox}{Table: \texttt{silver.metric\_ine\_rent}}
+    \small
+    \textbf{Grain:} One row per Zone per Year. \\
+    \textbf{Cleaning Logic:} Removes thousands separators (dots) and filters dataset to retain only ``Net average income per person''.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{zone\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{income\_per\_cap} & \texttt{DOUBLE} & Normalized net income value. \\
+        \texttt{year} & \texttt{INTEGER} & Reference year. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Fact Table (Core Mobility)}
+
+\begin{schemabox}{Table: \texttt{silver.fact\_mobility}}
+    \small
+    \textbf{Purpose:} The transactional heart of the Lakehouse. \\
+    \textbf{Grain:} One row per trip flow (Origin $\rightarrow$ Destination $\rightarrow$ Time Interval). \\
+    \textbf{Transformation:} Converts string dates/hours into Timezoned Timestamps. Invalid zones are excluded via Inner Joins to \texttt{dim\_zones}.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{period} & \texttt{TIMESTAMP} & \textbf{Logic:} \texttt{fecha} + \texttt{periodo} converted to ``Europe/Madrid'' time zone. \\
+        \texttt{partition\_date} & \texttt{DATE} & Physical Partition Key derived from \texttt{fecha}. \\
+        \texttt{origin\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{dest\_id} & \texttt{BIGINT} & \textbf{FK} reference to \texttt{dim\_zones}. \\
+        \texttt{trips} & \texttt{DOUBLE} & Number of trips (Precision Double). \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Data Observability}
+
+\begin{schemabox}{Table: \texttt{silver.data\_quality\_log}}
+    \small
+    \textbf{Purpose:} Metadata registry for monitoring pipeline health and data constraints.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{check\_timestamp} & \texttt{TIMESTAMP} & Audit execution time. \\
+        \texttt{table\_name} & \texttt{VARCHAR} & Target entity of the quality check. \\
+        \texttt{metric\_name} & \texttt{VARCHAR} & Type of check (e.g., ``null\_rate'', ``row\_count''). \\
+        \texttt{metric\_value} & \texttt{DOUBLE} & The quantitative result of the check. \\
+        \texttt{notes} & \texttt{VARCHAR} & Contextual warnings or error messages. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\linewidth]{imgs/Silver_Schema_diagramS4}
+    \caption{Entity-Relationship Diagram (ERD) of the Silver Layer. The schema follows a Star Schema design, centering on the \texttt{fact\_mobility} table linked to spatial (\texttt{dim\_zones}) and temporal dimensions.}
+    \label{fig:silver_layer_diagram}
+\end{figure}
+
+\newpage
+
+\subsection{Gold Layer (Data Mart)}
+The Gold layer serves as the final destination for analytics, specifically engineered to address distinct research questions. In contrast to the normalized Silver layer, these schemas are denormalized and pre-aggregated to optimize query performance for OLAP operations and visualization tools (e.g., Kepler.gl, Plotly).
+
+Below is the technical definition of the three core analytical products materialized in this layer:
+
+\subsubsection{Temporal Analysis (Cluster Profiles)}
+
+\begin{schemabox}{Table: \texttt{gold.typical\_day\_patterns}}
+    \small
+    \textbf{Purpose:} Persists the centroids of mobility profiles identified via Unsupervised Learning (K-Means). This table aggregates high-volume transactional data into lightweight hourly curves representing standard behavioral archetypes (e.g., ``Workday'' vs. ``Holiday''). \\
+    \textbf{Grain:} One row per Cluster per Hour.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{cluster\_id} & \texttt{INTEGER} & The label assigned by the K-Means algorithm (e.g., 0, 1, 2). \\
+        \texttt{hour} & \texttt{INTEGER} & Temporal interval (0-23). \\
+        \texttt{avg\_trips} & \texttt{DOUBLE} & The normalized average trip volume for this specific hour/cluster combination. Used for plotting demand curves. \\
+        \texttt{processed\_at} & \texttt{TIMESTAMP} & Audit timestamp. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Infrastructure Gap Analysis (Gravity Model)}
+
+\begin{schemabox}{Table: \texttt{gold.infrastructure\_gaps}}
+    \small
+    \textbf{Purpose:} The outcome of the Gravity Model implementation. This table synthesizes mobility flows with socio-economic dimensions to quantify the disparity between \textit{theoretical potential} and \textit{observed usage}. \\
+    \textbf{Grain:} One row per Origin-Destination pair.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{org\_zone\_id} & \texttt{BIGINT} & Origin Zone FK. \\
+        \texttt{dest\_zone\_id} & \texttt{BIGINT} & Destination Zone FK. \\
+        \texttt{population} & \texttt{BIGINT} & Population at origin (Demand Driver). \\
+        \texttt{rent} & \texttt{DOUBLE} & Income per capita at destination (Attractor). \\
+        \texttt{total\_trips} & \texttt{DOUBLE} & Observed mobility volume (from Silver). \\
+        \texttt{dist\_km} & \texttt{DOUBLE} & Distance impedance between zones. \\
+        \texttt{mismatch} & \texttt{DOUBLE} & \textbf{KPI:} Calculated as $ActualTrips / PotentialScore$. A value $\ll 1.0$ suggests an infrastructure deficit. \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\subsubsection{Functional Classification (Network Roles)}
+
+\begin{schemabox}{Table: \texttt{gold.zone\_functional\_class}}
+    \small
+    \textbf{Purpose:} A semantic layer that profiles every municipality based on its role in the metropolitan network (e.g., Net Labor Importer vs. Exporter). \\
+    \textbf{Grain:} One row per Zone.
+    
+    \vspace{0.2cm}
+    \rowcolors{2}{white}{techgray}
+    \begin{tabularx}{\linewidth}{l l X}
+        \toprule
+        \textbf{Column} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{zone\_id} & \texttt{BIGINT} & Primary Key. \\
+        \texttt{zone\_name} & \texttt{VARCHAR} & Human-readable name for map visualization. \\
+        \texttt{internal} & \texttt{DOUBLE} & Count of intra-zonal trips. \\
+        \texttt{outflow} & \texttt{DOUBLE} & Count of trips leaving the zone. \\
+        \texttt{inflow} & \texttt{DOUBLE} & Count of trips entering the zone. \\
+        \texttt{net\_flow} & \texttt{DOUBLE} & Metric: $(In - Out) / Total$. Positive values indicate ``Activity Hubs''. \\
+        \texttt{retention} & \texttt{DOUBLE} & Metric: $Internal / (Out + Internal)$. Indicates self-sufficiency. \\
+        \texttt{label} & \texttt{VARCHAR} & Categorical classification derived from decision tree logic (e.g., ``Bedroom Community''). \\
+        \bottomrule
+    \end{tabularx}
+\end{schemabox}
+
+\vspace{1cm}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{imgs/Gold_Schema_diagramS4} 
+    \caption{Gold Layer Schema. These tables represent the final analytical products, denormalized and enriched with derived metrics (e.g., mismatch ratios, functional labels) ready for visualization.}
+    \label{fig:gold_layer_diagram}
+\end{figure}
+
+\end{document}
