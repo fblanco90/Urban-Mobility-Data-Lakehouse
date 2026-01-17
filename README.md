@@ -35,7 +35,7 @@ Detailed documentation for each stage of development—including sprint goals, t
 ```text
 .
 ├── airflow/                    # Airflow Orchestration (Astro Project)
-│   ├── dags/                   # DAGs for ELT, Gold transformations, and testing
+│   ├── dags/                   # DAGs for ELT, Gold transformations. (utils_db has utility functions for the DAGs)
 │   ├── include/                # Static assets and generated artifacts
 │   │   └── results/            # Outputs from Gold DAGs (PNG, HTML, MD)
 │   │       ├── bq1/            # Mobility Patterns results
