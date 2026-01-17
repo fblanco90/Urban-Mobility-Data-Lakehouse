@@ -1,0 +1,51 @@
+---
+config:
+  layout: dagre
+---
+flowchart TB
+ subgraph Sources["External Sources"]
+        MITMA[("MITMA Files")]
+        INE[("INE Statistics")]
+        OD[("Open Data")]
+  end
+ subgraph Orchestration["Orchestration Layer"]
+        Airflow("Airflow")
+  end
+ subgraph Compute["Compute Layer"]
+        Batch["AWS Batch Worker"]
+        DuckDB{{"DuckDB Engine"}}
+  end
+ subgraph Layers["Medallion Architecture"]
+        Bronze["Bronze: Raw"]
+        Silver["Silver: Clean"]
+        Gold["Gold: Mart"]
+  end
+ subgraph DuckLake["DuckLake Storage System"]
+        Neon[("Neon Postgres Metadata Catalog")]
+        S3["AWS S3 Bucket - Physical Data (Parquet files)"]
+        Layers
+  end
+ subgraph Outputs["Analytics (Streamlit)"]
+        Kepler["Kepler.gl HTML Maps"]
+        Plots["Matplotlib PNGs"]
+        Report["Markdown Summary"]
+  end
+    Batch -- runs --> DuckDB
+    MITMA --> Orchestration
+    INE --> Orchestration
+    OD --> Orchestration
+    Airflow L_Airflow_Batch_0@-- Triggers DAG --> Batch
+    DuckDB -- Ingests --> Bronze
+    DuckDB -- Transforms --> Silver
+    DuckDB -- Aggregates --> Gold
+    DuckDB -. Metadata/Locks .-> Neon
+    Bronze -. Stored inside .- S3
+    Silver -. Stored inside .- S3
+    Gold -. Stored inside .- S3
+    Gold -- Generates --> Outputs
+
+    style DuckDB fill:#fff2cc,stroke:#d6b656
+    style Neon fill:#e1d5e7,stroke:#9673a6
+    style S3 fill:#dae8fc,stroke:#6c8ebf
+
+    L_Airflow_Batch_0@{ curve: natural }
