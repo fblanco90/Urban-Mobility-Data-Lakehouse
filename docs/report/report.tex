@@ -320,7 +320,7 @@ To efficiently manage dependencies between the Bronze, Silver and Gold layers, t
 \begin{enumerate} 
     \item \textbf{Infrastructure \& Dimensions DAG:} Manages the ingestion of low-velocity static data (Demographics, Zoning, Calendars). It establishes the schema foundations and populates the dimension tables in the Bronze and Silver layers.
     
-    \item \textbf{Mobility Ingestion DAG:} A parameterized, high-throughput worker pipeline. It utilizes dynamic task mapping to ingest, clean and transform daily mobility matrices from Bronze to Silver using atomic, parallelizable tasks.
+    \item \textbf{Mobility Ingestion DAG:} A parameterized, high-throughput data processing DAG that employs dynamic task mapping to ingest, clean, and transform daily mobility matrices from the Bronze to the Silver layer via atomic, independently executable tasks. The workflow is implemented for both local execution and distributed execution on AWS Batch, ensuring functional equivalence and reproducibility across environments.
     
     \item \textbf{Analytical \& Reporting DAGs:} These pipelines (DAGs 31–33) consolidate business logic into unified flows. Triggered on-demand with custom parameters, they materialize aggregated Gold tables and immediately generate final visual assets (Kepler.gl maps, Matplotlib charts) for future analysis.
 \end{enumerate}
@@ -416,19 +416,18 @@ This pipeline implements a Gravity Model to quantify the disparity between theor
     \item \textbf{Output:} Uses Kepler.gl to generate a \textit{Service Level Ranking} and a \textit{Mobility Gaps} arc map (Figure \ref{fig:bq2_results}).
 \end{itemize}
 
-\vspace{1cm}
 
 \begin{figure}[H]
     \centering
-    \begin{subfigure}[b]{1.0\textwidth}
+    \begin{subfigure}[b]{0.95\textwidth}
         \centering
         \includegraphics[width=\textwidth]{imgs/bq2-1}
         \caption{Zone Service Level Ranking}
         \label{fig:bq2_ranking}
     \end{subfigure}
 
-    \vspace{1cm}
-    \begin{subfigure}[b]{1.0\textwidth}
+    \vspace{0.5cm}
+    \begin{subfigure}[b]{0.95\textwidth}
         \centering
         \includegraphics[width=\textwidth]{imgs/bq2-2}
         \caption{Inter-urban Mobility Gaps (Arc Map)}
@@ -610,7 +609,6 @@ While the proposed architecture meets the primary research objectives, several l
 
 
 
-\newpage
 
 % --- BIBLIOGRAPHY ---
 \begin{thebibliography}{9}
