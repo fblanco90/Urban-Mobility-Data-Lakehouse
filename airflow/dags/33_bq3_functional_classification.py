@@ -191,6 +191,7 @@ def bq3_functional_classification():
                                 "visConfig": {
                                     "radius": 10,
                                     "fixedRadius": False,
+                                    "radiusRange": [10,5],
                                     "opacity": 0.9,
                                     "outline": True,
                                     "thickness": 1,
